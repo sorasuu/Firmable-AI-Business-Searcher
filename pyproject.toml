@@ -1,0 +1,19 @@
+[project]
+name = "firmable-ai-business-searcher"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.118.0",
+    "langchain>=0.3.27",
+    "langchain-community>=0.3.30",
+    "langchain-openai>=0.3.33",
+    "openai>=1.109.1",
+    "pydantic>=2.11.9",
+    "python-dotenv>=1.1.1",
+    "requests>=2.32.5",
+    "slowapi>=0.1.9",
+    "unstructured-client>=0.42.3",
+    "unstructured>=0.18.15",
+]
