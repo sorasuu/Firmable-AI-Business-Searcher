@@ -1,33 +1,32 @@
 # Node.js / Next.js files (not needed for backend)
-node_modules/
-.next/
-.vercel/
+node_modules
+.next
+.vercel
 pnpm-lock.yaml
-package.json
 
 # Frontend files
-app/
-components/
-public/
-styles/
-hooks/
-lib/
+app
+components
+public
+styles
+hooks
+lib
 *.tsx
 *.ts
 !api/**/*.py
 
 # Development files
-.git/
-.venv/
-__pycache__/
+.git
+.venv
+__pycache__
 *.pyc
 .env.local
 .DS_Store
 *.log
 
 # Build files
-dist/
-build/
+dist
+build
 tsconfig.json
 next.config.mjs
 postcss.config.mjs

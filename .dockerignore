@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# Next.js / Node.js
+node_modules/
+.next/
+.vercel/
+out/
+build/
+dist/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env.local
+.env
+
+# Git
+.git/
+.gitignore
+
+# Build artifacts
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Logs
+*.log
+
+# Frontend files (not needed for backend)
+app/
+components/
+public/
+styles/
+hooks/
+lib/
+*.tsx
+tsconfig.json
+next.config.mjs
+postcss.config.mjs
+components.json
+next-env.d.ts
+package.json
+pnpm-lock.yaml
+
+# Documentation
+README.md
+RAILWAY_*.md
