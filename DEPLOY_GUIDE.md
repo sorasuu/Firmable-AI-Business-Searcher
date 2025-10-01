@@ -21,12 +21,12 @@ Removed Python API configuration. Now only contains Next.js settings.
 
 ### Step 1: Deploy Backend to Railway
 
-```bash
+\`\`\`bash
 # Commit your changes
 git add .
 git commit -m "Configure split deployment: Vercel + Railway"
 git push origin main
-```
+\`\`\`
 
 Railway will automatically:
 1. Detect `Dockerfile`
@@ -39,10 +39,10 @@ Railway will automatically:
 Go to Vercel Dashboard → Your Project → Settings → Environment Variables
 
 Add these variables:
-```
+\`\`\`
 NEXT_PUBLIC_API_URL=https://your-backend.railway.app
 API_SECRET_KEY=your-secret-key-here
-```
+\`\`\`
 
 **Important**: Use the exact Railway URL you get from Step 1!
 
@@ -51,9 +51,9 @@ API_SECRET_KEY=your-secret-key-here
 Vercel will automatically deploy when you push to GitHub.
 
 Or deploy manually:
-```bash
+\`\`\`bash
 npx vercel --prod
-```
+\`\`\`
 
 Vercel will:
 1. ✅ Ignore `api/` folder (thanks to `.vercelignore`)
@@ -63,13 +63,13 @@ Vercel will:
 ## Test Your Deployment
 
 ### 1. Test Backend (Railway)
-```bash
+\`\`\`bash
 curl https://your-backend.railway.app/api/health
-```
+\`\`\`
 Expected response:
-```json
+\`\`\`json
 {"status":"healthy"}
-```
+\`\`\`
 
 ### 2. Test Frontend (Vercel)
 Visit: `https://your-project.vercel.app`
@@ -81,35 +81,35 @@ The frontend should be able to call the Railway backend!
 For local development, run both servers:
 
 **Terminal 1 - Backend:**
-```bash
+\`\`\`bash
 cd api
 uv run uvicorn index:app --reload --port 8000
-```
+\`\`\`
 
 **Terminal 2 - Frontend:**
-```bash
+\`\`\`bash
 pnpm dev
-```
+\`\`\`
 
 The Next.js rewrites will automatically proxy `/api/*` to `http://localhost:8000/api/*`.
 
 ## Environment Variables Summary
 
 ### Railway (Backend)
-```env
+\`\`\`env
 OPENAI_API_KEY=sk-...
 API_SECRET_KEY=your-secret-key
 UNSTRUCTURED_API_KEY=your-key (optional)
-```
+\`\`\`
 
 ### Vercel (Frontend)
-```env
+\`\`\`env
 NEXT_PUBLIC_API_URL=https://your-backend.railway.app
 API_SECRET_KEY=your-secret-key (same as backend)
-```
+\`\`\`
 
 ### Local (.env.local)
-```env
+\`\`\`env
 # Backend keys
 OPENAI_API_KEY=sk-...
 API_SECRET_KEY=your-secret-key
@@ -117,7 +117,7 @@ UNSTRUCTURED_API_KEY=your-key (optional)
 
 # Frontend will use localhost:8000 in development
 NEXT_PUBLIC_API_URL=http://localhost:8000
-```
+\`\`\`
 
 ## File Checklist
 
@@ -149,7 +149,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ## Architecture
 
-```
+\`\`\`
 ┌──────────────┐         ┌──────────────┐
 │   GitHub     │         │   GitHub     │
 │   (Push)     │         │   (Push)     │
@@ -168,7 +168,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
        ▼                        ▼
    your-app           your-backend
    .vercel.app        .railway.app
-```
+\`\`\`
 
 ## Next Steps
 

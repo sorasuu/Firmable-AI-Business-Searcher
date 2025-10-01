@@ -31,7 +31,7 @@ Railway will:
 
 ## File Structure
 
-```
+\`\`\`
 Firmable-AI-Business-Searcher/
 ├── api/                    # Backend (Railway)
 │   ├── __init__.py
@@ -54,13 +54,13 @@ Firmable-AI-Business-Searcher/
 ├── vercel.json            # Vercel config
 ├── railway.json           # Railway config
 └── Dockerfile             # Railway Docker build
-```
+\`\`\`
 
 ## Deployment Flow
 
 ### 1. Deploy Backend to Railway
 
-```bash
+\`\`\`bash
 # Push to GitHub
 git add .
 git commit -m "Configure split deployment"
@@ -68,35 +68,35 @@ git push origin main
 
 # Railway auto-deploys on push
 # You'll get a URL like: https://your-app.railway.app
-```
+\`\`\`
 
 ### 2. Update Frontend Environment Variables
 
 In your local `.env.local`:
-```env
+\`\`\`env
 API_URL=https://your-app.railway.app
 API_SECRET_KEY=your-secret-key
-```
+\`\`\`
 
 In Vercel dashboard (Settings → Environment Variables):
-```
+\`\`\`
 API_URL=https://your-app.railway.app
 API_SECRET_KEY=your-secret-key
 NEXT_PUBLIC_API_URL=https://your-app.railway.app (if needed for client-side)
-```
+\`\`\`
 
 ### 3. Deploy Frontend to Vercel
 
 Vercel will auto-deploy when you push to GitHub (if connected).
 
 Or manually:
-```bash
+\`\`\`bash
 vercel --prod
-```
+\`\`\`
 
 ## Architecture Diagram
 
-```
+\`\`\`
 ┌─────────────────────────────────────────────────┐
 │                   Internet                       │
 └─────────────────────────────────────────────────┘
@@ -113,7 +113,7 @@ vercel --prod
     Static Files              Python API
     React Components          + AI Processing
     Server Actions            + Web Scraping
-```
+\`\`\`
 
 ## Why This Architecture?
 
@@ -137,26 +137,26 @@ vercel --prod
 ## Environment Variables
 
 ### Backend (Railway)
-```env
+\`\`\`env
 OPENAI_API_KEY=sk-...
 API_SECRET_KEY=your-secret-key
 UNSTRUCTURED_API_KEY=your-key (optional)
 PORT=(Railway sets automatically)
-```
+\`\`\`
 
 ### Frontend (Vercel)
-```env
+\`\`\`env
 API_URL=https://your-backend.railway.app
 API_SECRET_KEY=your-secret-key (same as backend)
-```
+\`\`\`
 
 ## Testing
 
 ### Test Backend (Railway)
-```bash
+\`\`\`bash
 curl https://your-backend.railway.app/api/health
 # Expected: {"status":"healthy"}
-```
+\`\`\`
 
 ### Test Frontend (Vercel)
 Visit: `https://your-frontend.vercel.app`
@@ -164,24 +164,24 @@ Visit: `https://your-frontend.vercel.app`
 ## Updating Deployments
 
 ### Update Backend
-```bash
+\`\`\`bash
 # Make changes to api/ folder
 git add api/
 git commit -m "Update backend"
 git push
 
 # Railway auto-deploys
-```
+\`\`\`
 
 ### Update Frontend
-```bash
+\`\`\`bash
 # Make changes to app/ or components/
 git add app/ components/
 git commit -m "Update frontend"
 git push
 
 # Vercel auto-deploys
-```
+\`\`\`
 
 ## Troubleshooting
 
@@ -193,7 +193,7 @@ git push
 
 ### CORS Errors
 Make sure your FastAPI backend allows your Vercel domain:
-```python
+\`\`\`python
 # api/index.py
 app.add_middleware(
     CORSMiddleware,
@@ -202,7 +202,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-```
+\`\`\`
 
 ### API Connection Failed
 1. Check Railway URL is correct in Vercel environment variables
