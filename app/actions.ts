@@ -41,9 +41,9 @@ interface ChatResponse {
 }
 
 const API_BASE_URL = (() => {
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`
-  }
+  // if (process.env.VERCEL_URL) {
+  //   return `https://${process.env.VERCEL_URL}`
+  // }
   const url = process.env.API_URL || "http://localhost:8000"
   // Add http:// if protocol is missing
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
