@@ -3,8 +3,6 @@
 interface AnalysisRequest {
   url: string
   questions?: string[]
-  multi_page?: boolean
-  use_javascript?: boolean
 }
 
 interface AnalysisResponse {

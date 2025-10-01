@@ -1,6 +1,6 @@
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Building2, Users, MapPin, Target, Package, Mail, Phone } from "lucide-react"
+import { Building2, Users, MapPin, Target, Package, Mail, Phone, HelpCircle } from "lucide-react"
 
 interface InsightsDisplayProps {
   insights: {
@@ -11,6 +11,7 @@ interface InsightsDisplayProps {
     products_services?: string
     target_audience?: string
     sentiment?: string
+    questions?: string[]
     contact_info?: {
       emails?: string[]
       phones?: string[]
@@ -88,6 +89,23 @@ export function InsightsDisplay({ insights, url }: InsightsDisplayProps) {
             <h3 className="text-sm font-medium text-muted-foreground">Products & Services</h3>
           </div>
           <p className="text-foreground leading-relaxed">{insights.products_services}</p>
+        </Card>
+      )}
+
+      {insights.questions && insights.questions.length > 0 && (
+        <Card className="p-6">
+          <div className="flex items-center gap-2 mb-3">
+            <HelpCircle className="w-4 h-4 text-muted-foreground" />
+            <h3 className="text-sm font-medium text-muted-foreground">Questions</h3>
+          </div>
+          <ul className="space-y-2">
+            {insights.questions.map((question, index) => (
+              <li key={index} className="text-sm text-foreground leading-relaxed flex gap-2">
+                <span className="text-muted-foreground">•</span>
+                <span>{question}</span>
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 

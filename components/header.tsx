@@ -12,14 +12,6 @@ export function Header() {
             <span className="text-xl font-bold">InsightAI</span>
           </div>
 
-          <nav className="flex items-center gap-6">
-            <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-              Documentation
-            </a>
-            <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-              API
-            </a>
-          </nav>
         </div>
       </div>
     </header>

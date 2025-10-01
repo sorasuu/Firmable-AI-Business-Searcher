@@ -2,6 +2,14 @@
 
 An AI-powered platform for extracting and analyzing business insights from any website using advanced LangChain and Unstructured document processing.
 
+## 🚀 Live Demo
+
+- **Frontend URL**: [Deployed on Vercel]
+- **Backend API**: [Deployed on Railway]
+- **API Endpoints**:
+  - `POST /api/analyze` - Website analysis
+  - `POST /api/chat` - Conversational Q&A
+
 ## Features
 
 - **Website Analysis**: Extract key business information including industry, company size, location, USP, products/services, and target audience
@@ -29,7 +37,44 @@ An AI-powered platform for extracting and analyzing business insights from any w
 - **Groq API** with llama-3.3-70b-versatile model via LangChain
 - Rate limiting with SlowAPI (10/min for analysis, 20/min for chat)
 - Bearer token authentication
-- Deployed on Vercel
+- Deployed on Railway
+
+### AI Model Selection & Rationale
+
+**Primary Model: Groq (llama-3.3-70b-versatile)**
+
+**Why Groq?**
+1. **Speed**: Ultra-fast inference (~500+ tokens/second) thanks to Groq's LPU architecture
+2. **Cost-Effective**: Free tier with generous limits, significantly cheaper than OpenAI
+3. **Quality**: Llama 3.3 70B provides excellent reasoning and extraction capabilities
+4. **Reliability**: High uptime and stable API
+5. **Open Model**: Meta's Llama 3.3 is open-source, providing transparency
+
+**Why llama-3.3-70b-versatile?**
+- **70B Parameters**: Large enough for complex business analysis and semantic understanding
+- **Versatile Variant**: Optimized for diverse tasks (extraction, summarization, Q&A)
+- **Structured Outputs**: Works excellently with LangChain's structured output features
+- **Context Window**: 128k tokens allows processing of lengthy web pages
+- **Multilingual**: Strong performance across multiple languages
+
+**Alternative Models Considered:**
+- **OpenAI GPT-4**: More expensive, slower, overkill for this use case
+- **Anthropic Claude**: Excellent but costly, rate limits more restrictive
+- **Llama 3.1 405B**: Too large and slow for real-time web analysis
+- **Gemini**: Good but Groq's speed advantage is crucial for user experience
+
+**Why LangChain?**
+1. **Structured Outputs**: Pydantic models ensure consistent JSON responses
+2. **Prompt Management**: Reusable prompt templates
+3. **Error Handling**: Built-in retry logic and error handling
+4. **Conversation Memory**: Easy conversation history management
+5. **Extensibility**: Can swap LLM providers without code changes
+
+**Why Unstructured?**
+1. **Superior HTML Parsing**: Better than BeautifulSoup for complex layouts
+2. **Element Classification**: Automatically identifies titles, headings, content
+3. **Content Chunking**: Intelligent text segmentation by semantic meaning
+4. **Production Ready**: Handles edge cases and malformed HTML gracefully
 
 ## Getting Started
 
@@ -131,13 +176,14 @@ Analyze a website and extract business insights using LangChain and Unstructured
 \`\`\`json
 {
   "url": "https://example.com",
-  "questions": ["What is their pricing model?"]
+  "questions": ["What is their pricing model?", "Who are their main competitors?"]
 }
 \`\`\`
 
 **Headers:**
 \`\`\`
 Authorization: Bearer your-secret-key-here
+Content-Type: application/json
 \`\`\`
 
 **Response:**
@@ -155,12 +201,62 @@ Authorization: Bearer your-secret-key-here
     "contact_info": {
       "emails": ["contact@example.com"],
       "phones": ["555-0123"],
-      "social_media": {...}
+      "social_media": ["https://twitter.com/example"]
     },
-    "custom_answers": {...}
+    "custom_answers": {
+      "What is their pricing model?": "Subscription-based with tiered plans",
+      "Who are their main competitors?": "Tableau, Power BI, Looker"
+    }
   },
   "timestamp": "2025-01-10T12:00:00"
 }
+\`\`\`
+
+**cURL Example:**
+\`\`\`bash
+curl -X POST https://your-backend.railway.app/api/analyze \\
+  -H "Authorization: Bearer your-secret-key-here" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "url": "https://example.com",
+    "questions": ["What is their pricing model?"]
+  }'
+\`\`\`
+
+**Python Example:**
+\`\`\`python
+import requests
+
+url = "https://your-backend.railway.app/api/analyze"
+headers = {
+    "Authorization": "Bearer your-secret-key-here",
+    "Content-Type": "application/json"
+}
+data = {
+    "url": "https://example.com",
+    "questions": ["What is their pricing model?"]
+}
+
+response = requests.post(url, headers=headers, json=data)
+print(response.json())
+\`\`\`
+
+**JavaScript Example:**
+\`\`\`javascript
+const response = await fetch('https://your-backend.railway.app/api/analyze', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer your-secret-key-here',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    url: 'https://example.com',
+    questions: ['What is their pricing model?']
+  })
+});
+
+const data = await response.json();
+console.log(data);
 \`\`\`
 
 ### POST /api/chat
@@ -173,7 +269,7 @@ Ask follow-up questions about an analyzed website with conversation context.
   "query": "Who are their main competitors?",
   "conversation_history": [
     {"role": "user", "content": "What do they sell?"},
-    {"role": "assistant", "content": "They sell..."}
+    {"role": "assistant", "content": "They sell AI-powered analytics tools."}
   ]
 }
 \`\`\`
@@ -181,9 +277,109 @@ Ask follow-up questions about an analyzed website with conversation context.
 **Headers:**
 \`\`\`
 Authorization: Bearer your-secret-key-here
+Content-Type: application/json
+\`\`\`
+
+**Response:**
+\`\`\`json
+{
+  "url": "https://example.com",
+  "query": "Who are their main competitors?",
+  "response": "Based on the website content, their main competitors include Tableau, Microsoft Power BI, and Looker. They differentiate themselves through AI-powered insights and easier integration with existing tools.",
+  "timestamp": "2025-01-10T12:05:00"
+}
+\`\`\`
+
+**cURL Example:**
+\`\`\`bash
+curl -X POST https://your-backend.railway.app/api/chat \\
+  -H "Authorization: Bearer your-secret-key-here" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "url": "https://example.com",
+    "query": "Who are their main competitors?"
+  }'
+\`\`\`
+
+**Python Example:**
+\`\`\`python
+import requests
+
+url = "https://your-backend.railway.app/api/chat"
+headers = {
+    "Authorization": "Bearer your-secret-key-here",
+    "Content-Type": "application/json"
+}
+data = {
+    "url": "https://example.com",
+    "query": "Who are their main competitors?",
+    "conversation_history": [
+        {"role": "user", "content": "What do they sell?"},
+        {"role": "assistant", "content": "They sell AI-powered analytics tools."}
+    ]
+}
+
+response = requests.post(url, headers=headers, json=data)
+print(response.json())
 \`\`\`
 
 ## Architecture
+
+### System Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Client Browser                           │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             │ HTTPS
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Next.js Frontend (Vercel)                     │
+│  ┌────────────────┐  ┌─────────────┐  ┌──────────────────┐    │
+│  │  Analyzer Form │  │  Insights   │  │  Chat Interface  │    │
+│  │   Component    │  │   Display   │  │    Component     │    │
+│  └────────────────┘  └─────────────┘  └──────────────────┘    │
+│           │                                      │               │
+│           │         Server Actions               │               │
+│           └──────────────┬───────────────────────┘               │
+└──────────────────────────┼─────────────────────────────────────┘
+                           │
+                           │ API Calls (Bearer Token Auth)
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   FastAPI Backend (Railway)                      │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              API Endpoints (Rate Limited)                │  │
+│  │  ┌────────────────┐         ┌─────────────────────┐    │  │
+│  │  │ POST /analyze  │         │  POST /chat         │    │  │
+│  │  │ (10/min)       │         │  (20/min)           │    │  │
+│  │  └────────┬───────┘         └──────────┬──────────┘    │  │
+│  └───────────┼────────────────────────────┼───────────────┘  │
+│              │                             │                   │
+│  ┌───────────▼──────────────┐  ┌──────────▼──────────────┐   │
+│  │   WebsiteScraper         │  │  ConversationalAgent    │   │
+│  │   - Fetch HTML           │  │  - Context Management   │   │
+│  │   - Custom Headers       │  │  - Conversation History │   │
+│  └───────────┬──────────────┘  └──────────┬──────────────┘   │
+│              │                             │                   │
+│  ┌───────────▼──────────────┐              │                   │
+│  │   Unstructured Parser    │              │                   │
+│  │   - HTML Processing      │              │                   │
+│  │   - Content Extraction   │              │                   │
+│  │   - Title Chunking       │              │                   │
+│  └───────────┬──────────────┘              │                   │
+│              │                             │                   │
+│  ┌───────────▼─────────────────────────────▼──────────────┐   │
+│  │              LangChain + Groq LLM                       │   │
+│  │              (llama-3.3-70b-versatile)                  │   │
+│  │  - Structured Output (Pydantic)                         │   │
+│  │  - Business Insights Extraction                         │   │
+│  │  - Question Answering                                   │   │
+│  │  - Semantic Analysis                                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Rate Limiting
 All rate limiting is handled on the **backend** using SlowAPI:
@@ -218,6 +414,65 @@ Both the Next.js frontend and FastAPI backend will be deployed together on Verce
 - **Unstructured**: Advanced HTML parsing, content extraction, document chunking
 - **FastAPI**: High-performance Python API framework
 - **Next.js**: React framework with Server Actions
+
+## Development Environment
+
+- **IDE**: Visual Studio Code
+- **Recommended Extensions**:
+  - Python (Microsoft)
+  - Pylance
+  - ESLint
+  - Prettier
+  - Tailwind CSS IntelliSense
+
+## Testing
+
+### Running Tests
+
+1. Install test dependencies:
+```bash
+pip install -r api/requirements-test.txt
+```
+
+2. Run all tests:
+```bash
+pytest api/test_api.py -v
+```
+
+3. Run tests with coverage:
+```bash
+pytest api/test_api.py --cov=api --cov-report=html
+```
+
+4. Run specific test class:
+```bash
+pytest api/test_api.py::TestAuthentication -v
+```
+
+### Test Coverage
+
+The test suite includes comprehensive coverage for:
+- ✅ **Authentication & Authorization**: Bearer token validation
+- ✅ **Input Validation**: Pydantic model validation
+- ✅ **API Endpoints**: Both `/api/analyze` and `/api/chat`
+- ✅ **Error Handling**: Graceful error responses
+- ✅ **Rate Limiting**: Protection against abuse
+- ✅ **Health Checks**: Service availability monitoring
+
+### Test Structure
+
+```
+api/
+├── test_api.py                    # Comprehensive test suite
+│   ├── TestAuthentication         # Auth tests
+│   ├── TestValidation            # Input validation tests
+│   ├── TestAnalyzeEndpoint       # Analysis endpoint tests
+│   ├── TestChatEndpoint          # Chat endpoint tests
+│   ├── TestHealthEndpoints       # Health check tests
+│   ├── TestRateLimiting          # Rate limit tests
+│   └── TestErrorHandling         # Error handling tests
+└── requirements-test.txt          # Test dependencies
+```
 
 ## License
 

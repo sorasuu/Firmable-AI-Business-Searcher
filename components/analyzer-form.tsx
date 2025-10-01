@@ -6,7 +6,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
-import { Loader2, Search, AlertCircle } from "lucide-react"
+import { Loader2, Search, AlertCircle, Plus, X } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { InsightsDisplay } from "./insights-display"
 import { ChatInterface } from "./chat-interface"
@@ -19,6 +19,7 @@ export function AnalyzerForm() {
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<any>(null)
   const [multiPage, setMultiPage] = useState(true)
+  const [questions, setQuestions] = useState<string[]>([""])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -29,7 +30,12 @@ export function AnalyzerForm() {
     setResults(null)
 
     try {
-      const data = await analyzeWebsiteAction({ url, multi_page: multiPage })
+      // Filter out empty questions
+      const validQuestions = questions.filter((q) => q.trim() !== "")
+      const data = await analyzeWebsiteAction({ 
+        url, 
+        questions: validQuestions.length > 0 ? validQuestions : undefined
+      })
       setResults(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
@@ -42,6 +48,40 @@ export function AnalyzerForm() {
     setUrl("")
     setResults(null)
     setError(null)
+    setQuestions([""])
+  }
+
+  const handleQuestionChange = (index: number, value: string) => {
+    const newQuestions = [...questions]
+    newQuestions[index] = value
+    setQuestions(newQuestions)
+  }
+
+  const handleQuestionKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
+    if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault()
+      // Add new question field
+      const newQuestions = [...questions]
+      newQuestions.splice(index + 1, 0, "")
+      setQuestions(newQuestions)
+      // Focus the new input after a short delay
+      setTimeout(() => {
+        const inputs = document.querySelectorAll('input[data-question-input]')
+        const nextInput = inputs[index + 1] as HTMLInputElement
+        if (nextInput) nextInput.focus()
+      }, 0)
+    }
+  }
+
+  const addQuestion = () => {
+    setQuestions([...questions, ""])
+  }
+
+  const removeQuestion = (index: number) => {
+    if (questions.length > 1) {
+      const newQuestions = questions.filter((_, i) => i !== index)
+      setQuestions(newQuestions)
+    }
   }
 
   if (results) {
@@ -99,6 +139,54 @@ export function AnalyzerForm() {
                 </>
               )}
             </Button>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">
+              Custom Questions (Optional)
+            </label>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={addQuestion}
+              disabled={isLoading}
+            >
+              <Plus className="w-4 h-4 mr-1" />
+              Add Question
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Press Shift+Enter to add another question, Enter to submit
+          </p>
+          <div className="space-y-2">
+            {questions.map((question, index) => (
+              <div key={index} className="flex gap-2">
+                <Input
+                  data-question-input
+                  type="text"
+                  placeholder={`Question ${index + 1}`}
+                  value={question}
+                  onChange={(e) => handleQuestionChange(index, e.target.value)}
+                  onKeyDown={(e) => handleQuestionKeyDown(e, index)}
+                  disabled={isLoading}
+                  className="flex-1"
+                />
+                {questions.length > 1 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeQuestion(index)}
+                    disabled={isLoading}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            ))}
           </div>
         </div>
 
