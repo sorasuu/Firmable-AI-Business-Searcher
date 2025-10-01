@@ -1,0 +1,29 @@
+# Python backend files (deployed on Railway)
+api/
+*.py
+__pycache__/
+*.pyc
+.python-version
+requirements.txt
+pyproject.toml
+uv.lock
+.venv/
+venv/
+
+# Railway configuration files
+Dockerfile
+docker-compose.yml
+railway.json
+railway.toml
+nixpacks.toml
+Procfile
+runtime.txt
+.railwayignore
+
+# Python documentation
+RAILWAY_*.md
+DOCKER_*.md
+
+# Development files
+.env.local
+main.py
