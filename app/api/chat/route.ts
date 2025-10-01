@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server"
 import { validateApiKey, unauthorizedResponse } from "@/lib/auth"
-import { checkRateLimit } from "@/lib/rate-limit"
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit"
 import type { ConversationRequest } from "@/lib/types"
 
 export async function POST(request: NextRequest) {
@@ -12,7 +12,9 @@ export async function POST(request: NextRequest) {
 
   // Check rate limiting
   const clientIp = request.headers.get("x-forwarded-for") || "unknown"
-  if (!checkRateLimit(clientIp, 20)); // Higher limit for chat
+  if (!checkRateLimit(clientIp, 20)) {
+    return rateLimitResponse()
+  }
 
   try {
     const body: ConversationRequest = await request.json()
