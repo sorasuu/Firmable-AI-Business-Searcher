@@ -1,0 +1,12 @@
+fastapi
+pydantic
+slowapi
+langchain
+langchain-openai
+langchain-community
+unstructured[html]
+unstructured-client
+python-dotenv
+requests
+openai
+
