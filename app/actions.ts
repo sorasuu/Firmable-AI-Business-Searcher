@@ -54,7 +54,7 @@ const API_BASE_URL = (() => {
 const API_SECRET_KEY = process.env.API_SECRET_KEY
 
 async function checkBackendHealth(): Promise<{ healthy: boolean; error?: string }> {
-  const healthUrl = `${API_BASE_URL}/health`
+  const healthUrl = `${API_BASE_URL}/api/health`
   console.log("[v0] Checking backend health at:", healthUrl)
   console.log("[v0] Test the backend manually: Open", healthUrl, "in your browser")
 

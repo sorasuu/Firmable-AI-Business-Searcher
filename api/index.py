@@ -116,8 +116,13 @@ def read_root():
         }
     }
 
-@app.get("/health")
+@app.get("/api/health")
 def health_check():
+    return {"status": "healthy"}
+
+# Keep root health check for backward compatibility
+@app.get("/health")
+def health_check_root():
     return {"status": "healthy"}
 
 @app.post("/api/analyze", response_model=AnalysisResponse)
