@@ -16,4 +16,5 @@ dependencies = [
     "slowapi>=0.1.9",
     "unstructured-client>=0.42.3",
     "unstructured>=0.18.15",
+    "uvicorn[standard]>=0.37.0",
 ]
