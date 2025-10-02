@@ -4,18 +4,20 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
 from langchain.memory import ConversationBufferMemory
+from api.agent_tools import create_agent_executor
 
 class ConversationalAgent:
     def __init__(self):
         self.llm = ChatOpenAI(
             model="openai/gpt-oss-20b",
-            temperature=0.7,
+            temperature=0.2,
             api_key=os.environ.get("GROQ_API_KEY", ""),
             base_url="https://api.groq.com/openai/v1"
         )
         
         # Simple in-memory cache for website data
         self.website_cache = {}
+        self.use_agent_tools = True  # Enable agent with tool calling
     
     def cache_website_data(self, url: str, scraped_data: Dict, insights: Dict):
         """Cache website data for conversational context"""
@@ -30,7 +32,7 @@ class ConversationalAgent:
     
     def chat(self, url: str, query: str, conversation_history: Optional[List[Dict]] = None) -> str:
         """
-        Handle conversational queries about a website using LangChain.
+        Handle conversational queries about a website using agent with tool calling.
         Uses cached data if available, otherwise returns error.
         """
         
@@ -40,41 +42,74 @@ class ConversationalAgent:
         if not cached:
             return "I don't have information about this website yet. Please analyze it first using the /api/analyze endpoint."
         
-        # Prepare context from cached data
-        context = self._prepare_conversation_context(cached)
-        
-        # Build messages for LangChain
-        messages = [
-            SystemMessage(content=f"""You are an AI assistant that helps users understand websites and businesses. 
+        try:
+            # Create agent executor with the scraped data
+            agent_executor = create_agent_executor(
+                self.llm,
+                cached.get('scraped_data', {}),
+                cached.get('insights', {})
+            )
+            
+            # Convert history to LangChain format
+            chat_history = []
+            if conversation_history:
+                for msg in conversation_history[-5:]:  # Keep last 5 messages
+                    if msg.get('role') == 'user':
+                        chat_history.append(HumanMessage(content=msg.get('content', '')))
+                    elif msg.get('role') == 'assistant':
+                        chat_history.append(AIMessage(content=msg.get('content', '')))
+            
+            # Invoke agent with tool calling
+            result = agent_executor.invoke({
+                "input": query,
+                "chat_history": chat_history
+            })
+            
+            return result['output']
+            
+        except Exception as e:
+            print(f"[API] Agent error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Fallback to basic LLM response
+            context = self._prepare_conversation_context(cached)
+            messages = [
+                SystemMessage(content=f"""You are an AI assistant that helps users understand websites and businesses. 
 You have analyzed a website and have the following information:
 
 {context}
 
+IMPORTANT FORMATTING RULES:
+- Always format your responses using Markdown syntax
+- Use Markdown tables (| column | column |) instead of HTML tables
+- NEVER use HTML tags like <br>, <table>, <td>, <tr>, <div>, <span>, etc.
+- For line breaks in table cells, just use a single line or separate with commas
+- Use **bold** and *italic* for emphasis
+- Use `code` for inline code
+- Use - or * for bullet lists on new lines
+- Use # ## ### for headings
+
 Answer user questions based on this information. Be conversational, helpful, and concise. 
 If you don't have specific information to answer a question, say so honestly.""")
-        ]
-        
-        # Add conversation history if provided
-        if conversation_history:
-            for msg in conversation_history[-5:]:  # Keep last 5 messages for context
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                
-                if role == "user":
-                    messages.append(HumanMessage(content=content))
-                elif role == "assistant":
-                    messages.append(AIMessage(content=content))
-        
-        # Add current query
-        messages.append(HumanMessage(content=query))
-        
-        try:
-            # Use LangChain to generate response
-            response = self.llm.invoke(messages)
-            return response.content.strip()
+            ]
             
-        except Exception as e:
-            return f"I encountered an error processing your question: {str(e)}"
+            if conversation_history:
+                for msg in conversation_history[-5:]:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if role == "user":
+                        messages.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        messages.append(AIMessage(content=content))
+            
+            messages.append(HumanMessage(content=query))
+            
+            try:
+                response = self.llm.invoke(messages)
+                return response.content.strip()
+            except Exception as fallback_error:
+                return f"I encountered an error processing your question: {str(fallback_error)}"
     
     def _prepare_conversation_context(self, cached_data: Dict) -> str:
         """Prepare context string from cached website data"""

@@ -11,3 +11,5 @@ requests
 openai
 uvicorn[standard]
 flashrank
+beautifulsoup4
+lxml

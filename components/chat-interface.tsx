@@ -105,6 +105,39 @@ function MarkdownMessage({ content, isUser }: { content: string; isUser: boolean
               {children}
             </h3>
           ),
+          // Customize tables
+          table: ({ children, ...props }) => (
+            <div className="overflow-x-auto my-4">
+              <table className={`min-w-full border-collapse ${isUser ? 'border-white/20' : 'border-gray-300'}`} {...props}>
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ children, ...props }) => (
+            <thead className={`${isUser ? 'bg-white/10' : 'bg-gray-100'}`} {...props}>
+              {children}
+            </thead>
+          ),
+          tbody: ({ children, ...props }) => (
+            <tbody {...props}>
+              {children}
+            </tbody>
+          ),
+          tr: ({ children, ...props }) => (
+            <tr className={`border-b ${isUser ? 'border-white/20' : 'border-gray-200'}`} {...props}>
+              {children}
+            </tr>
+          ),
+          th: ({ children, ...props }) => (
+            <th className={`px-4 py-2 text-left text-xs font-semibold ${isUser ? 'text-white' : 'text-gray-700'}`} {...props}>
+              {children}
+            </th>
+          ),
+          td: ({ children, ...props }) => (
+            <td className={`px-4 py-2 text-sm ${isUser ? 'text-white/90' : 'text-gray-600'}`} {...props}>
+              {children}
+            </td>
+          ),
         }}
       >
         {sanitizedContent}

@@ -8,6 +8,8 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 import os
 from flashrank import Ranker, RerankRequest
+from bs4 import BeautifulSoup
+import json
 
 class WebsiteScraper:
     def __init__(self, llm=None):
@@ -54,6 +56,9 @@ class WebsiteScraper:
             # Use FlashRank to rerank chunks by relevance to business analysis
             reranked_chunks = self._rerank_chunks(cleaned_chunks, url)
 
+            # Extract all links from the page
+            all_links = self._extract_all_links(full_html, url)
+            
             # Extract structured data
             data = {
                 'url': url,
@@ -63,6 +68,7 @@ class WebsiteScraper:
                 'footer_content': self._extract_footer_content(elements),
                 'metadata': self._extract_metadata(elements),
                 'contact_info': self._extract_contact_info(full_html, elements),
+                'all_links': all_links,  # All extracted links with categories
                 'full_html': full_html,  # Keep the complete HTML
                 'structured_chunks': reranked_chunks[:15],  # Top 15 reranked chunks
                 'total_chunks': len(reranked_chunks)
@@ -213,6 +219,15 @@ class WebsiteScraper:
         # First try regex extraction
         contact_info = self._extract_contact_info_regex(html_text)
         
+        # Validate phone numbers with LLM if we found any
+        if contact_info.get('phones'):
+            print(f"[API] Validating {len(contact_info['phones'])} phone numbers with LLM...")
+            validated_phones = self._validate_phones_with_llm(
+                contact_info['phones'], 
+                html_text[:2000]  # Provide some context
+            )
+            contact_info['phones'] = validated_phones
+        
         # Check if we found minimal information
         has_emails = len(contact_info.get('emails', [])) > 0
         has_phones = len(contact_info.get('phones', [])) > 0
@@ -236,7 +251,15 @@ class WebsiteScraper:
         
         # Remove duplicates
         merged['emails'] = list(set(merged['emails']))[:3]
-        merged['phones'] = list(set(merged['phones']))[:3]
+        
+        # Validate merged phone numbers if any
+        if merged.get('phones'):
+            merged['phones'] = self._validate_phones_with_llm(
+                list(set(merged['phones'])), 
+                html_text[:2000]
+            )
+        else:
+            merged['phones'] = []
         
         return merged
     
@@ -289,12 +312,15 @@ class WebsiteScraper:
         
         phones = filtered_phones
         
-        # Extract social media links
+        # Extract social media links - Enhanced with more platforms
         social_patterns = {
             'twitter': r'https?://(?:www\.)?(?:twitter|x)\.com/[\w]+',
             'linkedin': r'https?://(?:www\.)?linkedin\.com/(?:company|in)/[\w-]+',
             'facebook': r'https?://(?:www\.)?facebook\.com/[\w.]+',
             'instagram': r'https?://(?:www\.)?instagram\.com/[\w.]+',
+            'youtube': r'https?://(?:www\.)?youtube\.com/(?:channel|c|user)/[\w-]+',
+            'github': r'https?://(?:www\.)?github\.com/[\w-]+',
+            'tiktok': r'https?://(?:www\.)?tiktok\.com/@[\w.]+',
         }
         
         social_media = {}
@@ -411,3 +437,137 @@ Prioritize footer content over main content for contact information."""),
             'phones': phones[:3],
             'social_media': social_media
         }
+    
+    def _extract_all_links(self, html_text: str, base_url: str) -> Dict:
+        """Extract all links from the page and categorize them"""
+        try:
+            soup = BeautifulSoup(html_text, 'html.parser')
+            links = {
+                'social_media': [],
+                'contact_pages': [],
+                'internal_pages': [],
+                'external_links': [],
+                'email_links': []
+            }
+            
+            # Social media patterns
+            social_domains = ['twitter.com', 'x.com', 'facebook.com', 'linkedin.com', 
+                            'instagram.com', 'youtube.com', 'github.com', 'tiktok.com',
+                            'pinterest.com', 'medium.com']
+            
+            # Contact page patterns
+            contact_keywords = ['contact', 'about', 'team', 'support', 'help', 'reach-us']
+            
+            for link in soup.find_all('a', href=True):
+                href = link.get('href', '').strip()
+                text = link.get_text().strip()
+                
+                if not href:
+                    continue
+                
+                # Handle mailto links
+                if href.startswith('mailto:'):
+                    email = href.replace('mailto:', '').split('?')[0]
+                    if email:
+                        links['email_links'].append({'email': email, 'text': text})
+                    continue
+                
+                # Handle tel links
+                if href.startswith('tel:'):
+                    continue
+                
+                # Make relative URLs absolute
+                if href.startswith('/'):
+                    href = f"{base_url.rstrip('/')}{href}"
+                elif not href.startswith('http'):
+                    continue
+                
+                # Categorize the link
+                is_social = any(domain in href.lower() for domain in social_domains)
+                is_contact = any(keyword in href.lower() for keyword in contact_keywords)
+                is_internal = base_url.split('/')[2] in href
+                
+                link_data = {'url': href, 'text': text}
+                
+                if is_social:
+                    links['social_media'].append(link_data)
+                elif is_contact:
+                    links['contact_pages'].append(link_data)
+                elif is_internal:
+                    links['internal_pages'].append(link_data)
+                else:
+                    links['external_links'].append(link_data)
+            
+            # Remove duplicates and limit results
+            for category in links:
+                seen = set()
+                unique_links = []
+                for link in links[category]:
+                    url_key = link.get('url') or link.get('email')
+                    if url_key and url_key not in seen:
+                        seen.add(url_key)
+                        unique_links.append(link)
+                links[category] = unique_links[:10]  # Limit to 10 per category
+            
+            return links
+            
+        except Exception as e:
+            print(f"[API] Error extracting links: {str(e)}")
+            return {
+                'social_media': [],
+                'contact_pages': [],
+                'internal_pages': [],
+                'external_links': [],
+                'email_links': []
+            }
+    
+    def _validate_phones_with_llm(self, phone_candidates: List[str], context: str = "") -> List[str]:
+        """Use LLM to validate which phone numbers are actually valid contact numbers"""
+        if not phone_candidates:
+            return []
+        
+        try:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """You are a phone number validator. Your job is to identify which numbers from a list are valid business contact phone numbers.
+
+Invalid numbers include:
+- Unix timestamps
+- Random number sequences
+- Order numbers or IDs
+- Dates in numeric format
+- Price numbers
+- Product codes
+
+Valid numbers typically:
+- Have proper phone formatting (parentheses, dashes, spaces, + signs)
+- Are 10-11 digits (with country code)
+- Follow standard patterns for business phones
+
+Return ONLY a JSON array of valid phone numbers from the input list."""),
+                ("human", """Phone number candidates: {phones}
+
+Context (if available): {context}
+
+Return valid phone numbers as a JSON array. Example: ["123-456-7890", "+1-555-123-4567"]""")
+            ])
+            
+            chain = prompt | self.llm
+            response = chain.invoke({
+                "phones": ", ".join(phone_candidates[:10]),  # Limit to first 10
+                "context": context[:500]  # Brief context
+            })
+            
+            # Parse the response
+            content = response.content.strip()
+            
+            # Try to extract JSON from the response
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                validated = json.loads(json_match.group())
+                return validated[:3]  # Return top 3
+            
+            return phone_candidates[:3]  # Fallback to original
+            
+        except Exception as e:
+            print(f"[API] Phone validation with LLM failed: {str(e)}")
+            return phone_candidates[:3]  # Fallback to original
