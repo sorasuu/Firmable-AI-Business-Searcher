@@ -1,11 +1,13 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import requests
 from unstructured.partition.html import partition_html
 from unstructured.chunking.title import chunk_by_title
+from unstructured.chunking.basic import chunk_elements
 import re
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 import os
+from flashrank import Ranker, RerankRequest
 
 class WebsiteScraper:
     def __init__(self, llm=None):
@@ -18,35 +20,137 @@ class WebsiteScraper:
             api_key=os.environ.get("GROQ_API_KEY", ""),
             base_url="https://api.groq.com/openai/v1"
         )
+
+        # Initialize FlashRank reranker
+        self.ranker = Ranker(model_name="ms-marco-TinyBERT-L-2-v2", cache_dir=".cache")
     
     def scrape_website(self, url: str) -> Dict:
-        """Scrape website content using Unstructured for better parsing"""
+        """Scrape website content using Unstructured with improved chunking and reranking"""
         try:
             # Fetch the HTML content
             response = requests.get(url, headers=self.headers, timeout=15)
             response.raise_for_status()
-            
-            # Use Unstructured to partition the HTML
-            elements = partition_html(text=response.text, url=url)
-            
-            # Chunk the content by title for better organization
-            chunks = chunk_by_title(elements, max_characters=2000)
-            
+
+            # Keep the full HTML content
+            full_html = response.text
+
+            # Use Unstructured to partition the HTML into document elements
+            elements = partition_html(text=full_html, url=url, include_metadata=True)
+
+            # Create chunks using basic chunking for better control
+            chunks = chunk_elements(
+                elements,
+                max_characters=1500,  # Smaller chunks for better reranking
+                overlap=200,  # Some overlap to maintain context
+                new_after_n_chars=1400
+            )
+
+            # Convert chunks to text for processing
+            chunk_texts = [str(chunk) for chunk in chunks]
+
+            # Clean and filter chunks to remove code-heavy content
+            cleaned_chunks = self._clean_chunks(chunk_texts)
+
+            # Use FlashRank to rerank chunks by relevance to business analysis
+            reranked_chunks = self._rerank_chunks(cleaned_chunks, url)
+
             # Extract structured data
             data = {
                 'url': url,
                 'title': self._extract_title(elements),
                 'headings': self._extract_headings(elements),
-                'main_content': self._extract_content(chunks),
+                'main_content': self._extract_content(reranked_chunks),
+                'footer_content': self._extract_footer_content(elements),
                 'metadata': self._extract_metadata(elements),
-                'contact_info': self._extract_contact_info(response.text),
-                'structured_chunks': [str(chunk) for chunk in chunks[:10]]  # First 10 chunks
+                'contact_info': self._extract_contact_info(full_html, elements),
+                'full_html': full_html,  # Keep the complete HTML
+                'structured_chunks': reranked_chunks[:15],  # Top 15 reranked chunks
+                'total_chunks': len(reranked_chunks)
             }
-            
+
             return data
-            
+
         except Exception as e:
             raise Exception(f"Failed to scrape website: {str(e)}")
+
+    def _rerank_chunks(self, chunks: List[str], url: str) -> List[str]:
+        """Rerank chunks using FlashRank for better relevance to business analysis"""
+        try:
+            # Create query for business analysis relevance
+            query = "business company information products services contact details industry analysis"
+
+            # Prepare passages for reranking
+            passages = []
+            for i, chunk in enumerate(chunks):
+                passages.append({
+                    "id": str(i),
+                    "text": chunk[:2000],  # Limit chunk size for reranking
+                    "meta": {"url": url, "chunk_id": i}
+                })
+
+            # Create rerank request
+            rerank_request = RerankRequest(
+                query=query,
+                passages=passages
+            )
+
+            # Perform reranking
+            results = self.ranker.rerank(rerank_request)
+
+            # Sort chunks by reranking score (highest first)
+            sorted_chunks = []
+            for result in results:
+                chunk_index = int(result["id"])
+                sorted_chunks.append(chunks[chunk_index])
+
+            return sorted_chunks
+
+        except Exception as e:
+            print(f"Reranking failed, using original order: {str(e)}")
+            return chunks
+    
+    def _clean_chunks(self, chunks: List[str]) -> List[str]:
+        """Clean and filter chunks to remove code-heavy or irrelevant content"""
+        cleaned_chunks = []
+        
+        for chunk in chunks:
+            # Skip chunks that are too short
+            if len(chunk.strip()) < 50:
+                continue
+            
+            # Skip chunks that appear to be mostly code
+            code_indicators = ['<script', '<style', 'function(', 'var ', 'const ', 'let ', 'import ', 'export ', 'class ', 'def ', 'if __name__']
+            code_lines = 0
+            total_lines = max(1, len(chunk.split('\n')))
+            
+            for line in chunk.split('\n'):
+                line = line.strip()
+                if any(indicator in line for indicator in code_indicators):
+                    code_lines += 1
+            
+            # Skip if more than 30% of lines appear to be code
+            if code_lines / total_lines > 0.3:
+                continue
+            
+            # Skip chunks with excessive HTML tags
+            html_tags = len(re.findall(r'<[^>]+>', chunk))
+            if html_tags > len(chunk.split()) * 0.5:  # More tags than words
+                continue
+            
+            # Clean up the chunk text
+            # Remove excessive whitespace
+            cleaned_chunk = re.sub(r'\s+', ' ', chunk.strip())
+            
+            # Remove HTML tags but keep content
+            cleaned_chunk = re.sub(r'<[^>]+>', ' ', cleaned_chunk)
+            
+            # Clean up again
+            cleaned_chunk = re.sub(r'\s+', ' ', cleaned_chunk).strip()
+            
+            if len(cleaned_chunk) >= 100:  # Keep chunks with substantial content
+                cleaned_chunks.append(cleaned_chunk)
+        
+        return cleaned_chunks[:20]  # Limit to top 20 cleaned chunks
     
     def _extract_title(self, elements) -> str:
         """Extract title from elements"""
@@ -66,12 +170,31 @@ class WebsiteScraper:
                 })
         return headings[:15]
     
-    def _extract_content(self, chunks) -> str:
-        """Extract main content from chunks"""
+    def _extract_content(self, reranked_chunks: List[str]) -> str:
+        """Extract main content from reranked chunks"""
+        # Use top chunks for main content (reranked for relevance)
         content_parts = []
-        for chunk in chunks[:8]:  # First 8 chunks
-            content_parts.append(str(chunk))
+        for chunk in reranked_chunks[:12]:  # Top 12 reranked chunks
+            content_parts.append(chunk)
         return "\n\n".join(content_parts)
+    
+    def _extract_footer_content(self, elements) -> str:
+        """Extract footer content from document elements"""
+        footer_parts = []
+        for element in elements:
+            # Check if element is in footer based on category or metadata
+            if hasattr(element, 'category') and element.category in ['Footer', 'FooterText']:
+                footer_parts.append(str(element))
+            elif hasattr(element, 'metadata') and element.metadata:
+                # Check metadata for footer indicators
+                if hasattr(element.metadata, 'tag') and element.metadata.tag and 'footer' in element.metadata.tag.lower():
+                    footer_parts.append(str(element))
+                elif hasattr(element.metadata, 'element_id') and element.metadata.element_id and 'footer' in element.metadata.element_id.lower():
+                    footer_parts.append(str(element))
+                elif hasattr(element.metadata, 'class_name') and element.metadata.class_name and any('footer' in cls.lower() for cls in element.metadata.class_name):
+                    footer_parts.append(str(element))
+
+        return "\n".join(footer_parts) if footer_parts else ""
     
     def _extract_metadata(self, elements) -> dict:
         """Extract metadata from elements"""
@@ -85,8 +208,8 @@ class WebsiteScraper:
                 break
         return metadata
     
-    def _extract_contact_info(self, html_text: str) -> dict:
-        """Extract contact information using regex, with LLM fallback"""
+    def _extract_contact_info(self, html_text: str, elements) -> dict:
+        """Extract contact information using regex, with LLM fallback that includes footer content"""
         # First try regex extraction
         contact_info = self._extract_contact_info_regex(html_text)
         
@@ -99,9 +222,10 @@ class WebsiteScraper:
         if has_emails or has_phones or has_social:
             return contact_info
         
-        # Otherwise, try LLM extraction as fallback
-        print("[API] Regex extraction found limited contact info, trying LLM fallback...")
-        llm_contact_info = self._extract_contact_info_with_llm(html_text)
+        # Otherwise, try LLM extraction as fallback with footer content
+        print("[API] Regex extraction found limited contact info, trying LLM fallback with footer content...")
+        footer_content = self._extract_footer_content(elements)
+        llm_contact_info = self._extract_contact_info_with_llm(html_text, footer_content)
         
         # Merge results, preferring regex results where available
         merged = {
@@ -121,8 +245,49 @@ class WebsiteScraper:
         # Extract emails
         emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', html_text)
         
-        # Extract phone numbers
-        phones = re.findall(r'\b(?:\+?1[-.]?)?\d{3}[-.]?\d{3}[-.]?\d{4}\b', html_text)
+        # Extract phone numbers with improved patterns to avoid timestamps
+        phone_patterns = [
+            r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',  # (123) 456-7890, 123-456-7890, 123.456.7890
+            r'\b\+?\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # +1 123 456 7890, +61 123 456 789
+            r'\b\d{4}[-.\s]?\d{3}[-.\s]?\d{3}\b',  # Australian format: 1234 567 890
+        ]
+        
+        phones = []
+        for pattern in phone_patterns:
+            matches = re.findall(pattern, html_text)
+            phones.extend(matches)
+        
+        # Filter out obvious non-phone numbers (timestamps, IDs, etc.)
+        filtered_phones = []
+        for phone in phones:
+            # Remove all non-digit characters for validation
+            digits_only = re.sub(r'\D', '', phone)
+            
+            # Skip Unix timestamps (10-13 digits, common ranges for 2000s-2020s)
+            if len(digits_only) >= 10 and len(digits_only) <= 13:
+                # Check if it looks like a Unix timestamp (seconds since 1970)
+                try:
+                    timestamp = int(digits_only)
+                    # Unix timestamps from 2000-2025 are roughly 946684800 to 1735689600
+                    if 946684800 <= timestamp <= 1735689600:
+                        continue
+                except ValueError:
+                    pass
+            
+            # Skip if it looks like an ID or timestamp (too many identical digits, sequential, etc.)
+            if len(digits_only) >= 10:
+                # Check for obvious patterns that aren't phone numbers
+                if digits_only.isdigit():
+                    # Skip sequential numbers (1234567890, 9876543210, etc.)
+                    if digits_only in ['1234567890', '0987654321', '0123456789', '9876543210']:
+                        continue
+                    # Skip numbers with too many repeated digits
+                    if any(digits_only.count(d) > 6 for d in '0123456789'):
+                        continue
+            
+            filtered_phones.append(phone)
+        
+        phones = filtered_phones
         
         # Extract social media links
         social_patterns = {
@@ -144,22 +309,33 @@ class WebsiteScraper:
             'social_media': social_media
         }
     
-    def _extract_contact_info_with_llm(self, html_text: str) -> dict:
-        """Extract contact information using LLM when regex fails"""
+    def _extract_contact_info_with_llm(self, html_text: str, footer_content: str = "") -> dict:
+        """Extract contact information using LLM when regex fails, including footer content"""
         try:
             # Truncate HTML text to reasonable length for LLM
-            truncated_text = html_text[:8000]  # Limit to 8000 characters
+            truncated_text = html_text[:12000]  # Limit to 20000 characters
+            
+            # Prepare context with footer content prioritized
+            context_parts = [truncated_text]
+            if footer_content:
+                context_parts.insert(0, f"FOOTER CONTENT (HIGH PRIORITY FOR CONTACT INFO):\n{footer_content[:4000]}")
+                context_parts.insert(1, "\nMAIN CONTENT:")
+            
+            full_context = "\n\n".join(context_parts)
             
             prompt = ChatPromptTemplate.from_messages([
                 ("system", """You are an expert at extracting contact information from website content. 
 Extract emails, phone numbers, and social media links from the provided HTML content.
+Pay special attention to footer content as it often contains contact information.
+
 Return the information in a structured JSON format with these keys:
 - emails: array of email addresses found
 - phones: array of phone numbers found  
 - social_media: object with keys like 'twitter', 'linkedin', 'facebook', 'instagram' containing arrays of URLs
 
-Only extract information that appears to be legitimate contact information. Be precise and don't make assumptions."""),
-                ("human", f"Extract contact information from this website content:\n\n{truncated_text}")
+Only extract information that appears to be legitimate contact information. Be precise and don't make assumptions.
+Prioritize footer content over main content for contact information."""),
+                ("human", f"Extract contact information from this website content:\n\n{full_context}")
             ])
             
             chain = prompt | self.llm

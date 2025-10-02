@@ -1,6 +1,8 @@
-# Website Insights AI
+# Firmable AI Searcher Proto
 
 An AI-powered platform for extracting and analyzing business insights from any website using advanced LangChain and Unstructured document processing.
+
+> **Built with a pragmatic approach**: Delivering customer value that's good enough to consume and easy to change. Perfect is the enemy of good.
 
 ## 🚀 Live Demo
 
@@ -13,12 +15,29 @@ An AI-powered platform for extracting and analyzing business insights from any w
 ## Features
 
 - **Website Analysis**: Extract key business information including industry, company size, location, USP, products/services, and target audience
+- **Custom Questions**: Ask specific questions about any company (e.g., "Who owns this company?", "What is their pricing model?")
 - **Advanced Document Processing**: Uses Unstructured for superior HTML parsing and content extraction
 - **LangChain Integration**: Structured AI workflows with LangChain for reliable, consistent outputs
 - **Conversational Interface**: Ask follow-up questions about analyzed websites with conversation history
 - **Backend Rate Limiting**: Secure rate limiting handled entirely on the FastAPI backend
 - **Secure API**: Bearer token authentication with server-side secret management
 - **Groq Integration**: Fast, cost-effective LLM inference using Groq's API
+- **Extensible Design**: Easy to extend with multi-page scraping, web search, or additional features
+
+## Quick Value Propositions
+
+### For Business Users
+- ✅ Quickly research any company without manual browsing
+- ✅ Ask custom questions relevant to your use case
+- ✅ Get structured, consistent data across companies
+- ✅ Have natural conversations to dig deeper
+
+### For Developers
+- ✅ Clean, modular codebase
+- ✅ Well-documented APIs with examples
+- ✅ Easy to extend and customize
+- ✅ Comprehensive test coverage
+- ✅ Production-ready deployment setup
 
 ## Tech Stack
 
@@ -106,7 +125,8 @@ npm install
 
 2. Install backend dependencies:
 \`\`\`bash
-pip install -r api/requirements.txt
+cd api
+uv sync
 \`\`\`
 
 ### Development
@@ -159,13 +179,13 @@ Visit `http://localhost:3000` to use the application.
 - Add `API_SECRET_KEY=your-secret-key-here` (use any string for local dev)
 
 **Backend won't start:**
-- Make sure Python dependencies are installed: `pip install -r api/requirements.txt`
+- Make sure Python dependencies are installed: `cd api && uv sync`
 - Check that you're in the `api` directory when running uvicorn
 - Verify Python version: `python --version` (should be 3.9+)
 
 **Module not found errors:**
 - Frontend: Run `npm install`
-- Backend: Run `pip install -r api/requirements.txt`
+- Backend: Run `cd api && uv sync`
 
 ## API Endpoints
 
@@ -425,13 +445,45 @@ Both the Next.js frontend and FastAPI backend will be deployed together on Verce
   - Prettier
   - Tailwind CSS IntelliSense
 
+## Future Enhancements (Easy to Add)
+
+The application is designed with extensibility in mind. Here are potential enhancements that can be added without major refactoring:
+
+### Multi-Page Scraping
+- **Current**: Analyzes homepage only for fast, focused insights
+- **Extension**: Add breadth-first crawling to analyze entire websites
+- **Use Case**: Deep company research, comprehensive product catalogs
+
+### Web Search Integration
+- **Current**: Analyzes provided URL only
+- **Extension**: Integrate Tavily/SerpAPI for broader context
+- **Use Case**: Answer questions beyond homepage (e.g., "Who owns this company?")
+
+### Enhanced Data Extraction
+- **Current**: Core business fields + custom questions
+- **Extension**: Company relationships, funding history, executive team
+- **Use Case**: Investment research, competitive analysis
+
+### Export & Integration
+- **Current**: JSON API responses
+- **Extension**: CSV/PDF exports, CRM integrations, webhooks
+- **Use Case**: Batch processing, automated workflows
+
+### Caching & Performance
+- **Current**: Simple in-memory cache
+- **Extension**: Redis caching, database storage, result persistence
+- **Use Case**: Scale to high traffic, faster repeat queries
+
+> All enhancements maintain backward compatibility and can be toggled via API parameters.
+
 ## Testing
 
 ### Running Tests
 
 1. Install test dependencies:
 ```bash
-pip install -r api/requirements-test.txt
+cd api
+uv sync --extra test
 ```
 
 2. Run all tests:

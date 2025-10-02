@@ -13,7 +13,11 @@ import { ChatInterface } from "./chat-interface"
 import { analyzeWebsiteAction } from "@/app/actions"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
-export function AnalyzerForm() {
+interface AnalyzerFormProps {
+  onResultsChange?: (hasResults: boolean) => void
+}
+
+export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   const [url, setUrl] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -28,6 +32,7 @@ export function AnalyzerForm() {
     setIsLoading(true)
     setError(null)
     setResults(null)
+    onResultsChange?.(false)
 
     try {
       // Filter out empty questions
@@ -37,6 +42,7 @@ export function AnalyzerForm() {
         questions: validQuestions.length > 0 ? validQuestions : undefined
       })
       setResults(data)
+      onResultsChange?.(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
@@ -49,6 +55,7 @@ export function AnalyzerForm() {
     setResults(null)
     setError(null)
     setQuestions([""])
+    onResultsChange?.(false)
   }
 
   const handleQuestionChange = (index: number, value: string) => {
@@ -102,39 +109,44 @@ export function AnalyzerForm() {
   }
 
   return (
-    <Card className="p-8">
+    <Card className="p-8 shadow-2xl border-0 bg-white/80 backdrop-blur-sm">
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" className="bg-red-50 border-red-200">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
 
-        <div className="space-y-2">
-          <label htmlFor="url" className="text-sm font-medium">
+        <div className="space-y-3">
+          <label htmlFor="url" className="text-sm font-semibold text-gray-700">
             Website URL
           </label>
-          <div className="flex gap-2">
+          <div className="flex gap-3">
             <Input
               id="url"
               type="url"
               placeholder="https://example.com"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              className="flex-1"
+              className="flex-1 h-12 text-base border-gray-300 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               required
               disabled={isLoading}
             />
-            <Button type="submit" disabled={isLoading} size="lg">
+            <Button 
+              type="submit" 
+              disabled={isLoading} 
+              size="lg"
+              className="h-12 px-8 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold shadow-lg shadow-purple-500/30 transition-all"
+            >
               {isLoading ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                   Analyzing
                 </>
               ) : (
                 <>
-                  <Search className="w-4 h-4 mr-2" />
+                  <Search className="w-5 h-5 mr-2" />
                   Analyze
                 </>
               )}
@@ -142,9 +154,9 @@ export function AnalyzerForm() {
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">
+            <label className="text-sm font-semibold text-gray-700">
               Custom Questions (Optional)
             </label>
             <Button
@@ -153,12 +165,13 @@ export function AnalyzerForm() {
               size="sm"
               onClick={addQuestion}
               disabled={isLoading}
+              className="border-purple-200 text-purple-700 hover:bg-purple-50"
             >
               <Plus className="w-4 h-4 mr-1" />
               Add Question
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-gray-500">
             Press Shift+Enter to add another question, Enter to submit
           </p>
           <div className="space-y-2">
@@ -190,8 +203,8 @@ export function AnalyzerForm() {
           </div>
         </div>
 
-        <div className="pt-4 border-t border-border">
-          <h3 className="text-sm font-medium mb-3">What you'll discover:</h3>
+        <div className="pt-6 border-t border-gray-200">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">What you'll discover:</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {[
               "Industry & Market Sector",
@@ -201,8 +214,8 @@ export function AnalyzerForm() {
               "Target Audience",
               "Contact Information",
             ].map((item) => (
-              <div key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
-                <div className="w-1.5 h-1.5 rounded-full bg-accent" />
+              <div key={item} className="flex items-center gap-2 text-sm text-gray-600">
+                <div className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-purple-600 to-blue-600" />
                 {item}
               </div>
             ))}

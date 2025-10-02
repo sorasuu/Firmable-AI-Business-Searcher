@@ -1,5 +1,5 @@
 {
-  "name": "my-v0-project",
+  "name": "firmable-ai-searcher-proto",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -43,6 +43,7 @@
     "clsx": "^2.1.1",
     "cmdk": "latest",
     "date-fns": "4.1.0",
+    "dompurify": "^3.2.7",
     "embla-carousel-react": "latest",
     "geist": "latest",
     "input-otp": "latest",
@@ -53,6 +54,7 @@
     "react-day-picker": "latest",
     "react-dom": "^18",
     "react-hook-form": "latest",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "latest",
     "recharts": "latest",
     "sonner": "latest",

@@ -21,6 +21,11 @@ interface AnalysisResponse {
       social_media?: string[]
     }
     custom_answers?: Record<string, string>
+    source_chunks?: Record<string, Array<{
+      chunk_index: number
+      chunk_text: string
+      relevance_score: number
+    }>>
   }
   timestamp: string
 }

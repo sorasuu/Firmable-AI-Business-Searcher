@@ -44,3 +44,4 @@ __pycache__/
 # virtualenv
 .venv/
 ENV/
+.cache/

@@ -7,7 +7,7 @@ import { Suspense } from "react"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "InsightAI - Website Intelligence Platform",
+  title: "Firmable AI Searcher Proto - Website Intelligence Platform",
   description: "AI-powered website analysis and business insights",
   generator: "v0.app",
 }
