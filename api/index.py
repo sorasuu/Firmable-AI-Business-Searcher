@@ -64,6 +64,16 @@ class ConversationResponse(BaseModel):
     response: str
     timestamp: str
 
+class ReportRequest(BaseModel):
+    url: HttpUrl
+    conversation_history: Optional[List[dict]] = None
+
+class ReportResponse(BaseModel):
+    url: str
+    report: dict
+    insights: dict
+    timestamp: str
+
 # Authentication helper
 def verify_auth(authorization: Optional[str] = Header(None)):
     if not authorization:
@@ -247,6 +257,44 @@ def merge_contact_info(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dic
         merged['social_media'] = social_merged
 
     return merged
+
+
+@app.post("/api/report", response_model=ReportResponse)
+@limiter.limit("5/minute")
+async def generate_business_report(
+    request: Request,
+    data: ReportRequest,
+    authorization: str = Header(None)
+):
+    """
+    Generate a business intelligence report based on chat history and custom answers.
+    Requires Bearer token authentication.
+    Rate limited to 5 requests per minute.
+    """
+    verify_auth(authorization)
+
+    try:
+        result = chat_agent.generate_business_report(
+            url=str(data.url),
+            conversation_history=data.conversation_history
+        )
+
+        if not result:
+            raise HTTPException(status_code=404, detail="No analysis found for this URL. Please analyze it first.")
+
+        return ReportResponse(
+            url=str(data.url),
+            report=result.get('report', {}),
+            insights=result.get('insights', {}),
+            timestamp=datetime.utcnow().isoformat()
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error generating business report: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
 
 @app.post("/api/chat", response_model=ConversationResponse)
 @limiter.limit("20/minute")

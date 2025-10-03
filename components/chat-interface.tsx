@@ -21,6 +21,7 @@ interface ChatInterfaceProps {
   url: string
   expanded?: boolean
   onFocusChange?: (active: boolean) => void
+  onTranscriptChange?: (messages: Message[]) => void
 }
 
 // Component for rendering markdown messages with sanitization
@@ -150,7 +151,7 @@ function MarkdownMessage({ content, isUser }: { content: string; isUser: boolean
   )
 }
 
-export function ChatInterface({ url, expanded = false, onFocusChange }: ChatInterfaceProps) {
+export function ChatInterface({ url, expanded = false, onFocusChange, onTranscriptChange }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -168,6 +169,10 @@ export function ChatInterface({ url, expanded = false, onFocusChange }: ChatInte
 
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" })
   }, [messages])
+
+  useEffect(() => {
+    onTranscriptChange?.(messages)
+  }, [messages, onTranscriptChange])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -200,7 +205,7 @@ export function ChatInterface({ url, expanded = false, onFocusChange }: ChatInte
           content: response.response,
         },
       ])
-    } catch (error) {
+  } catch {
       setMessages((prev) => [
         ...prev,
         {

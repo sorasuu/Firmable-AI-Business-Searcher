@@ -6,26 +6,40 @@ import { useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
-import { Loader2, Search, AlertCircle, Plus, X } from "lucide-react"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Loader2, Search, AlertCircle, Plus, X, Sparkles } from "lucide-react"
 import { InsightsDisplay } from "./insights-display"
 import { ChatInterface } from "./chat-interface"
-import { analyzeWebsiteAction } from "@/app/actions"
+import { analyzeWebsiteAction, generateBusinessReportAction } from "@/app/actions"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
 interface AnalyzerFormProps {
   onResultsChange?: (hasResults: boolean) => void
 }
 
+type ChatMessage = {
+  role: "user" | "assistant"
+  content: string
+}
+
+type AnalyzerResult = Awaited<ReturnType<typeof analyzeWebsiteAction>> & {
+  report?: Awaited<ReturnType<typeof generateBusinessReportAction>>["report"]
+}
+
 export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   const [url, setUrl] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [results, setResults] = useState<any>(null)
-  const [multiPage, setMultiPage] = useState(true)
+  const [results, setResults] = useState<AnalyzerResult | null>(null)
   const [questions, setQuestions] = useState<string[]>([""])
-  const [isChatActive, setIsChatActive] = useState(false)
+  const [isChatFocused, setIsChatFocused] = useState(false)
+  const [isBusinessIntelSourcesOpen, setIsBusinessIntelSourcesOpen] = useState(false)
+  const [chatTranscript, setChatTranscript] = useState<ChatMessage[]>([])
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
+  const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null)
   const focusScrollRef = useRef<number | null>(null)
+
+  const isChatActive = isChatFocused || isBusinessIntelSourcesOpen
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -39,8 +53,8 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
     try {
       // Filter out empty questions
       const validQuestions = questions.filter((q) => q.trim() !== "")
-      const data = await analyzeWebsiteAction({ 
-        url, 
+      const data = await analyzeWebsiteAction({
+        url,
         questions: validQuestions.length > 0 ? validQuestions : undefined
       })
       setResults(data)
@@ -57,12 +71,64 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
     setResults(null)
     setError(null)
     setQuestions([""])
-    setIsChatActive(false)
+    setIsChatFocused(false)
+    setIsBusinessIntelSourcesOpen(false)
+    setChatTranscript([])
+    setReportError(null)
+    setReportSuccessMessage(null)
     onResultsChange?.(false)
   }
 
+  const handleGenerateReport = async () => {
+    if (!results?.url || isGeneratingReport) {
+      return
+    }
+
+    setIsGeneratingReport(true)
+    setReportError(null)
+    setReportSuccessMessage(null)
+
+    try {
+      const limitedHistory = chatTranscript.slice(-20).map((message) => ({
+        role: message.role,
+        content: message.content,
+      }))
+
+      const reportResponse = await generateBusinessReportAction({
+        url: results.url,
+        conversation_history: limitedHistory,
+      })
+
+      setResults((prev) => {
+        if (!prev) {
+          return {
+            url: reportResponse.url,
+            insights: reportResponse.insights,
+            timestamp: reportResponse.timestamp ?? new Date().toISOString(),
+            report: reportResponse.report,
+          }
+        }
+
+        return {
+          ...prev,
+          url: reportResponse.url,
+          insights: reportResponse.insights,
+          report: reportResponse.report,
+          timestamp: reportResponse.timestamp ?? prev.timestamp,
+        }
+      })
+
+      setReportSuccessMessage("Business intelligence updated with the latest chat insights.")
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate report"
+      setReportError(message)
+    } finally {
+      setIsGeneratingReport(false)
+    }
+  }
+
   const handleChatFocusChange = (active: boolean) => {
-    setIsChatActive(active)
+    setIsChatFocused(active)
 
     if (typeof window === "undefined") {
       return
@@ -116,10 +182,42 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   if (results) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <Button variant="outline" onClick={handleReset}>
-            Analyze Another Website
-          </Button>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handleReset}>
+              Analyze Another Website
+            </Button>
+            <Button
+              type="button"
+              onClick={handleGenerateReport}
+              disabled={isGeneratingReport}
+              className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white"
+            >
+              {isGeneratingReport ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Updating Report
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Generate Business Report
+                </>
+              )}
+            </Button>
+          </div>
+          {reportError && (
+            <Alert variant="destructive" className="bg-red-50 border-red-200 md:max-w-md">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{reportError}</AlertDescription>
+            </Alert>
+          )}
+          {reportSuccessMessage && !reportError && (
+            <Alert className="bg-green-50 border-green-200 text-green-800 md:max-w-md">
+              <Sparkles className="h-4 w-4" />
+              <AlertDescription>{reportSuccessMessage}</AlertDescription>
+            </Alert>
+          )}
         </div>
 
         <div
@@ -136,7 +234,15 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
                 : "lg:w-1/2"
             } flex-1`}
           >
-            <InsightsDisplay insights={results.insights} url={results.url} />
+            <InsightsDisplay
+              insights={results.insights}
+              url={results.url}
+              onPanelToggle={(panelKey, isExpanded) => {
+                if (panelKey === "business_intel") {
+                  setIsBusinessIntelSourcesOpen(isExpanded)
+                }
+              }}
+            />
           </div>
           <div
             className={`${
@@ -149,6 +255,7 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
               url={results.url}
               expanded={isChatActive}
               onFocusChange={handleChatFocusChange}
+              onTranscriptChange={setChatTranscript}
             />
           </div>
         </div>
@@ -252,7 +359,7 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
         </div>
 
         <div className="pt-6 border-t border-gray-200">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">What you'll discover:</h3>
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">What you&apos;ll discover:</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {[
               "Industry & Market Sector",

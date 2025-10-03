@@ -3,7 +3,7 @@ import json
 import os
 import re
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse
 from langchain_groq import ChatGroq
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
 from api.groq_services import GroqCompoundClient
@@ -28,6 +28,32 @@ PLACEHOLDER_KEYWORDS = (
     "unknown",
     "n/a",
 )
+
+PERSONAL_EMAIL_DOMAINS = {
+    "gmail.com",
+    "yahoo.com",
+    "hotmail.com",
+    "outlook.com",
+    "live.com",
+    "aol.com",
+    "icloud.com",
+    "protonmail.com",
+    "pm.me",
+}
+
+SOCIAL_DOMAIN_HINTS = {
+    "linkedin": "linkedin.com",
+    "twitter": "twitter.com",
+    "x": "twitter.com",
+    "facebook": "facebook.com",
+    "instagram": "instagram.com",
+    "youtube": "youtube.com",
+    "tiktok": "tiktok.com",
+    "github": "github.com",
+    "other": None,
+}
+
+EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 class ConversationalAgent:
     def __init__(
@@ -215,23 +241,32 @@ User Question: {query}
             context, source_results = self._build_context(normalized_url, cached, "contact information")
 
             messages: List[Any] = [
-                SystemMessage(content="""You extract contact information from website context.
-Respond strictly in JSON with the structure:
+                SystemMessage(content="""You are a contact information extraction specialist. Use ONLY the provided website context as ground truth.
+
+CRITICAL RULES:
+1. Return STRICT JSON matching this schema (arrays may be empty but must exist):
 {
-  "emails": [string],
-  "phones": [string],
-  "contact_urls": [string],
-  "addresses": [string],
-  "social_media": {
-     "linkedin": [string],
-     "twitter": [string],
-     "facebook": [string],
-     "instagram": [string],
-     "youtube": [string],
-     "other": [string]
-  }
+    "emails": [string],
+    "phones": [string],
+    "contact_urls": [string],
+    "addresses": [string],
+    "social_media": {
+         "linkedin": [string],
+         "twitter": [string],
+         "facebook": [string],
+         "instagram": [string],
+         "youtube": [string],
+         "other": [string]
+    }
 }
-Collect every email, phone number, and contact page URL explicitly mentioned. Include only verified items from the context."""),
+2. Only emit values that appear explicitly in the context. If information is missing, leave the array empty.
+3. Do NOT invent, normalize, or guess URLs. Use the exact link text as shown (including https/http). Ignore placeholders like https://[company].com.
+4. Do NOT return personal email providers (gmail, yahoo, outlook, etc.). Accept only professional or company domains.
+5. Strip prefixes like "mailto:" or "tel:" before returning the value. Never include query parameters.
+6. Only surface official social handles. Make sure each link matches the expected platform domain.
+7. Remove duplicate entries (case-insensitive) and trim whitespace. If no valid contacts exist, output empty arrays.
+
+Respond with JSON only."""),
                 HumanMessage(content=f"Website Context:\n{context}\n\nReturn JSON only.")
             ]
 
@@ -259,6 +294,162 @@ Collect every email, phone number, and contact page URL explicitly mentioned. In
         return {
             'contact_info': contact_payload,
             'source_chunks': formatted_sources,
+        }
+
+    def generate_business_report(
+        self,
+        url: str,
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_url, cached = self._get_or_restore_cached(url)
+        if not cached:
+            return None
+
+        insights = cached.get('insights', {}) or {}
+        existing_business_intel = insights.get('business_intel') or {}
+
+        conversation_history = conversation_history or []
+
+        try:
+            self._maybe_run_live_visit(normalized_url, "business intelligence", cached)
+            context, _ = self._build_context(normalized_url, cached, "business intelligence report")
+        except Exception as error:
+            print(f"[API] Failed to build context for business report on {normalized_url}: {error}")
+            context = ""
+
+        insights_snapshot = {field: insights.get(field) for field in INSIGHT_FIELDS}
+        custom_answers = insights.get('custom_answers') or {}
+        formatted_history = self._format_conversation_history(conversation_history)
+
+        prompt_payload = {
+            "insights": insights_snapshot,
+            "custom_answers": custom_answers,
+            "conversation_history": formatted_history,
+            "context_excerpt": context[-3200:],
+        }
+
+        messages: List[Any] = [
+            SystemMessage(content="""You are a senior business intelligence analyst. Using only the provided insights, custom question answers, retrieved context, and conversation history, produce an updated report.
+
+Return STRICT JSON with the following structure:
+{
+  "insight_updates": {
+    "summary"?: string,
+    "industry"?: string,
+    "company_size"?: string,
+    "location"?: string,
+    "usp"?: string,
+    "products_services"?: string,
+    "target_audience"?: string,
+    "sentiment"?: string
+  },
+  "business_intelligence": {
+    "conversation_summary": string,
+    "executive_summary": string,
+    "key_opportunities": [string],
+    "risks": [string],
+    "recommended_actions": [string]
+  }
+}
+
+Rules:
+- Only include updates that are explicitly supported by the provided materials.
+- If an item is unknown, use an empty object or empty array.
+- Keep bullet points concise (max ~200 characters each).
+- Never invent URLs or facts."""),
+            HumanMessage(content=(
+                "Generate the business intelligence JSON based on this payload.\n"
+                f"Payload: {json.dumps(prompt_payload, ensure_ascii=False)}"
+            )),
+        ]
+
+        try:
+            response = self.llm.invoke(messages)
+            raw_content = (response.content or "").strip() if response else ""
+        except Exception as error:
+            print(f"[API] Business report generation failed for {normalized_url}: {error}")
+            return None
+
+        try:
+            json_start = raw_content.find('{')
+            json_end = raw_content.rfind('}') + 1
+            if json_start == -1 or json_end <= json_start:
+                return None
+            report_payload = json.loads(raw_content[json_start:json_end])
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            print(f"[API] Unable to parse business report JSON for {normalized_url}: {error}")
+            return None
+
+        if not isinstance(report_payload, dict):
+            return None
+
+        insight_updates = report_payload.get('insight_updates') or {}
+        business_intel = report_payload.get('business_intelligence') or {}
+
+        if not isinstance(insight_updates, dict):
+            insight_updates = {}
+        if not isinstance(business_intel, dict):
+            business_intel = {}
+
+        business_intel.setdefault('conversation_summary', existing_business_intel.get('conversation_summary', ''))
+        business_intel.setdefault('executive_summary', existing_business_intel.get('executive_summary', ''))
+        business_intel.setdefault('key_opportunities', existing_business_intel.get('key_opportunities', []))
+        business_intel.setdefault('risks', existing_business_intel.get('risks', []))
+        business_intel.setdefault('recommended_actions', existing_business_intel.get('recommended_actions', []))
+
+        # Prepare descriptive answer text for update verifier
+        update_lines = []
+        for field, value in insight_updates.items():
+            if field in INSIGHT_FIELDS and isinstance(value, str) and value.strip():
+                update_lines.append(f"{field}: {value.strip()}")
+
+        executive_summary = business_intel.get('executive_summary') or ""
+        verification_answer = "\n".join(update_lines + (["Executive Summary:", executive_summary] if executive_summary else []))
+
+        if verification_answer:
+            self._maybe_update_analysis_fields(
+                url=normalized_url,
+                cached=cached,
+                question="Generate a unified business intelligence report",
+                answer_text=verification_answer,
+                context=context,
+            )
+
+        # Refresh insights after potential updates
+        insights = cached.get('insights', {}) or {}
+        source_chunks = insights.setdefault('source_chunks', {})
+
+        sanitized_business_intel = {
+            'conversation_summary': str(business_intel.get('conversation_summary') or existing_business_intel.get('conversation_summary') or '').strip(),
+            'executive_summary': str(business_intel.get('executive_summary') or existing_business_intel.get('executive_summary') or '').strip(),
+            'key_opportunities': [item.strip() for item in business_intel.get('key_opportunities') or [] if isinstance(item, str) and item.strip()],
+            'risks': [item.strip() for item in business_intel.get('risks') or [] if isinstance(item, str) and item.strip()],
+            'recommended_actions': [item.strip() for item in business_intel.get('recommended_actions') or [] if isinstance(item, str) and item.strip()],
+        }
+
+        insights['business_intel'] = sanitized_business_intel
+
+        summary_preview = sanitized_business_intel.get('executive_summary') or sanitized_business_intel.get('conversation_summary') or ''
+        if summary_preview:
+            source_chunks['business_intel'] = [{
+                'chunk_index': -1,
+                'chunk_text': f"[Business Intel] {summary_preview[:400]}",
+                'relevance_score': 1.0,
+            }]
+
+        cached['insights'] = insights
+
+        try:
+            self.store.update_insights(normalized_url, insights)
+        except Exception as error:
+            print(f"[API] Failed to persist business intel for {normalized_url}: {error}")
+
+        return {
+            'report': {
+                'insight_updates': insight_updates,
+                'business_intelligence': sanitized_business_intel,
+            },
+            'insights': insights,
         }
 
     def _is_live_visit_enabled(self) -> bool:
@@ -294,7 +485,7 @@ Collect every email, phone number, and contact page URL explicitly mentioned. In
             'url': result.get('url', target_url),
             'content': content,
             'query': query,
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.now(datetime.timezone.utc).isoformat() + 'Z',
             'executed_tools': result.get('executed_tools'),
             'error': result.get('error'),
         }
@@ -734,14 +925,16 @@ Collect every email, phone number, and contact page URL explicitly mentioned. In
 
         emails = self._ensure_string_list(payload.get('emails'))
         phones = self._ensure_string_list(payload.get('phones'))
-        contact_urls = self._ensure_string_list(payload.get('contact_urls'))
+        contact_urls_raw = self._ensure_string_list(payload.get('contact_urls'))
         addresses = self._ensure_string_list(payload.get('addresses'))
 
+        contact_urls, contact_emails, contact_phones = self._sanitize_contact_urls(contact_urls_raw)
+        emails = self._sanitize_emails(emails + contact_emails)
+        phones = self._sanitize_phone_numbers(phones + contact_phones)
+        addresses = self._sanitize_addresses(addresses)
+
         socials_payload = payload.get('social_media') or {}
-        social_media: Dict[str, List[str]] = {}
-        if isinstance(socials_payload, dict):
-            for key, value in socials_payload.items():
-                social_media[key] = self._ensure_string_list(value)
+        social_media = self._sanitize_social_media(socials_payload)
 
         return {
             'emails': emails,
@@ -768,3 +961,202 @@ Collect every email, phone number, and contact page URL explicitly mentioned. In
                     unique.append(item)
             return unique
         return []
+
+    def _sanitize_emails(self, values: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            if not raw:
+                continue
+            candidate = str(raw).strip()
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered.startswith("mailto:"):
+                candidate = candidate.split(":", 1)[1]
+            candidate = candidate.split("?", 1)[0].strip()
+            if not candidate:
+                continue
+            if not EMAIL_PATTERN.fullmatch(candidate):
+                continue
+            domain = candidate.split("@", 1)[-1].lower()
+            if domain in PERSONAL_EMAIL_DOMAINS:
+                continue
+            key = candidate.lower()
+            if key not in seen:
+                seen.add(key)
+                cleaned.append(candidate)
+        return cleaned
+
+    def _sanitize_phone_numbers(self, values: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            if not raw:
+                continue
+            candidate = str(raw).strip()
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered.startswith("tel:") or lowered.startswith("callto:"):
+                candidate = candidate.split(":", 1)[1]
+            candidate = candidate.split("?", 1)[0]
+            candidate = re.sub(r"[^0-9+().\-\s]", "", candidate)
+            candidate = re.sub(r"\s+", " ", candidate).strip()
+            if not candidate or len(candidate) < 7:
+                continue
+            if candidate not in seen:
+                seen.add(candidate)
+                cleaned.append(candidate)
+        return cleaned
+
+    def _sanitize_contact_urls(self, values: List[str]) -> tuple[List[str], List[str], List[str]]:
+        cleaned_urls: List[str] = []
+        seen_urls: set[str] = set()
+        extracted_emails: List[str] = []
+        extracted_phones: List[str] = []
+
+        for raw in values:
+            if not raw:
+                continue
+            candidate = str(raw).strip()
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered.startswith("mailto:"):
+                email_value = candidate.split(":", 1)[1]
+                email_value = email_value.split("?", 1)[0].strip()
+                if email_value:
+                    extracted_emails.append(email_value)
+                continue
+            if lowered.startswith("tel:") or lowered.startswith("callto:"):
+                phone_value = candidate.split(":", 1)[1]
+                phone_value = phone_value.split("?", 1)[0].strip()
+                if phone_value:
+                    extracted_phones.append(phone_value)
+                continue
+
+            parsed = urlparse(candidate)
+            scheme = (parsed.scheme or "").lower()
+            if scheme not in {"http", "https"}:
+                continue
+
+            normalized = self._normalize_url(candidate)
+            if not normalized:
+                continue
+
+            key = normalized.lower()
+            if key not in seen_urls:
+                seen_urls.add(key)
+                cleaned_urls.append(normalized)
+
+        return cleaned_urls, extracted_emails, extracted_phones
+
+    def _sanitize_addresses(self, values: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            if not raw:
+                continue
+            candidate = str(raw).strip()
+            if not candidate:
+                continue
+            if len(candidate) < 5:
+                continue
+            key = candidate.lower()
+            if key not in seen:
+                seen.add(key)
+                cleaned.append(candidate)
+        return cleaned
+
+    def _sanitize_social_media(self, payload: Any) -> Dict[str, List[str]]:
+        sanitized: Dict[str, List[str]] = {}
+        if not isinstance(payload, dict):
+            return sanitized
+
+        for key, value in payload.items():
+            key_str = str(key).strip().lower()
+            canonical_key = "twitter" if key_str == "x" else key_str
+            if canonical_key not in SOCIAL_DOMAIN_HINTS:
+                canonical_key = "other"
+
+            values = self._ensure_string_list(value)
+            domain_hint = SOCIAL_DOMAIN_HINTS.get(canonical_key)
+            cleaned_links: List[str] = []
+            seen_links: set[str] = set()
+
+            for raw_link in values:
+                if not raw_link:
+                    continue
+                candidate = str(raw_link).strip()
+                if not candidate:
+                    continue
+                lowered = candidate.lower()
+                if lowered.startswith("mailto:"):
+                    continue
+
+                parsed = urlparse(candidate)
+                scheme = (parsed.scheme or "").lower()
+                if scheme not in {"http", "https"}:
+                    continue
+
+                domain = parsed.netloc.lower()
+                if domain_hint and domain_hint not in domain:
+                    continue
+
+                normalized = self._normalize_url(candidate)
+                if not normalized:
+                    continue
+
+                key_link = normalized.lower()
+                if key_link not in seen_links:
+                    seen_links.add(key_link)
+                    cleaned_links.append(normalized)
+
+            if cleaned_links:
+                sanitized[canonical_key] = cleaned_links
+
+        for expected_key in ("linkedin", "twitter", "facebook", "instagram", "youtube", "other"):
+            sanitized.setdefault(expected_key, [])
+
+        return sanitized
+
+    @staticmethod
+    def _normalize_url(raw_url: str) -> str:
+        candidate = (raw_url or "").strip()
+        if not candidate:
+            return ""
+        parsed = urlparse(candidate)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        path = (parsed.path or "").rstrip("/")
+        sanitized = parsed._replace(path=path, fragment="")
+        normalized = urlunparse(sanitized)
+        if normalized.endswith("?"):
+            normalized = normalized[:-1]
+        return normalized
+
+    @staticmethod
+    def _format_conversation_history(
+        history: Optional[List[Dict[str, Any]]],
+        max_messages: int = 20,
+        max_chars: int = 4000,
+    ) -> str:
+        if not history:
+            return ""
+
+        trimmed_history = history[-max_messages:]
+        segments: List[str] = []
+        total = 0
+        for entry in trimmed_history:
+            role = str(entry.get('role', 'user')).strip().lower()
+            content = str(entry.get('content', '')).strip()
+            if not content:
+                continue
+            segment = f"{role}: {content}"
+            if total + len(segment) > max_chars:
+                break
+            segments.append(segment)
+            total += len(segment)
+
+        return "\n".join(segments)
