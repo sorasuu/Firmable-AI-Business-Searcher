@@ -1,531 +1,198 @@
-# Firmable AI Searcher Proto
+# Firmable AI Business Insight Agent
 
-An AI-powered platform for extracting and analyzing business insights from any website using advanced LangChain and Unstructured document processing.
+An end-to-end prototype that fulfils the requirements in `docs/Requirement.md`: scrape a company homepage, derive structured business insights, and support conversational follow-up backed by cached analysis.
 
-> **Built with a pragmatic approach**: Delivering customer value that's good enough to consume and easy to change. Perfect is the enemy of good.
+The system exposes two authenticated, rate-limited FastAPI endpoints (`/api/analyze` and `/api/chat`) and a Next.js interface that makes those capabilities easier to explore.
 
-## 🚀 Live Demo
+---
 
-- **Frontend URL**: [Deployed on Vercel]
-- **Backend API**: [Deployed on Railway]
-- **API Endpoints**:
-  - `POST /api/analyze` - Website analysis
-  - `POST /api/chat` - Conversational Q&A
+## Key Capabilities
 
-## Features
+- **Single-page intelligence** – Uses Firecrawl (when available) or a hardened BeautifulSoup fallback to capture the homepage, normalise the content, and cache it locally.
+- **LLM-backed analysis** – Groq’s ChatGroq client (default model `openai/gpt-oss-20b`) infers industry, company size, USP, target audience, sentiment, and more. Outputs are normalised and enriched with supporting text snippets.
+- **Contact enrichment** – Deterministic parsers combined with LLM validation extract emails, phone numbers, addresses, and social links. `/api/analyze` merges the deterministic results with conversational contact intelligence.
+- **Conversational follow-up** – `/api/chat` reuses the cached scrape + insight store so follow-up questions, business-intel summaries, or on-demand reports can be generated without re-scraping.
+- **Safety & governance** – Bearer-token authentication, SlowAPI rate limiting (10/min for analysis, 20/min for chat), structured error envelopes, and request validation via Pydantic.
+- **Modern UI** – A Next.js 14 frontend with Tailwind CSS, shadcn/ui components, server actions, and a chat workspace that mirrors the API contract (including custom questions and report generation).
 
-- **Website Analysis**: Extract key business information including industry, company size, location, USP, products/services, and target audience
-- **Custom Questions**: Ask specific questions about any company (e.g., "Who owns this company?", "What is their pricing model?")
-- **Advanced Document Processing**: Uses Unstructured for superior HTML parsing and content extraction
-- **LangChain Integration**: Structured AI workflows with LangChain for reliable, consistent outputs
-- **Conversational Interface**: Ask follow-up questions about analyzed websites with conversation history
-- **Backend Rate Limiting**: Secure rate limiting handled entirely on the FastAPI backend
-- **Secure API**: Bearer token authentication with server-side secret management
-- **Groq Integration**: Fast, cost-effective LLM inference using Groq's API
-- **Extensible Design**: Easy to extend with multi-page scraping, web search, or additional features
+---
 
-## Quick Value Propositions
+## Architecture Overview
 
-### For Business Users
-- ✅ Quickly research any company without manual browsing
-- ✅ Ask custom questions relevant to your use case
-- ✅ Get structured, consistent data across companies
-- ✅ Have natural conversations to dig deeper
+** For detailed architecture diagrams and design decisions, see [ARCHITECTURE.md](./ARCHITECTURE.md)**
 
-### For Developers
-- ✅ Clean, modular codebase
-- ✅ Well-documented APIs with examples
-- ✅ Easy to extend and customize
-- ✅ Comprehensive test coverage
-- ✅ Production-ready deployment setup
+The system consists of:
 
-## Tech Stack
+- **Next.js Frontend** (Vercel)  Analyzer form with custom questions, insight cards, contact panels, and chat interface. Uses server actions to call the FastAPI backend with Bearer auth.
+- **FastAPI Backend** (Railway/Local)  Two rate-limited endpoints:
+  - /api/analyze (10/min)  orchestrator.analyze()
+  - /api/chat (20/min)  conversational_agent.chat()
+  - Includes rate limiting, auth middleware, and CORS
+- **WebsiteScraper**  Firecrawl scrape (primary) with BeautifulSoup fallback, JSONL caching
+- **AIAnalyzer**  Groq LLM extracts BusinessInsights (summary, industry, size, USP, etc.) and answers custom questions with sourced snippets
+- **ConversationalAgent**  Caches scrape + insight bundle in AnalysisStore, handles chat Q&A, contact enrichment, and business reports
 
-### Frontend (Next.js)
-- Next.js 15 with App Router
-- TypeScript
-- Tailwind CSS v4
-- shadcn/ui components
-- Server Actions for secure API communication
-- Deployed on Vercel
+Supporting modules:
 
-### Backend (FastAPI)
-- FastAPI with Python
-- **LangChain** for AI orchestration and structured outputs
-- **Unstructured** for advanced HTML parsing and document processing
-- **Groq API** with llama-3.3-70b-versatile model via LangChain
-- Rate limiting with SlowAPI (10/min for analysis, 20/min for chat)
-- Bearer token authentication
-- Deployed on Railway
+- `api/core/*`  shared settings, security, and limiter plumbing
+- `api/data_store.py`  lightweight in-memory store with semantic search hooks for cached chunks
+- `api/services/container.py`  lazily instantiates Groq clients, scraper, analyzer, and chat agent for dependency injection
 
-### AI Model Selection & Rationale
+---
 
-**Primary Model: Groq (llama-3.3-70b-versatile)**
+## API Contract
 
-**Why Groq?**
-1. **Speed**: Ultra-fast inference (~500+ tokens/second) thanks to Groq's LPU architecture
-2. **Cost-Effective**: Free tier with generous limits, significantly cheaper than OpenAI
-3. **Quality**: Llama 3.3 70B provides excellent reasoning and extraction capabilities
-4. **Reliability**: High uptime and stable API
-5. **Open Model**: Meta's Llama 3.3 is open-source, providing transparency
+| Endpoint | Rate limit | Description |
+| --- | --- | --- |
+| `POST /api/analyze` | 10 requests/min per IP | Scrapes the homepage, runs the LLM pipeline, merges deterministic + AI contact data, and returns `insights`, optional `custom_answers`, and supporting `source_chunks`. |
+| `POST /api/chat` | 20 requests/min per IP | Answers follow-up questions using cached data; conversation history can be supplied to maintain context. |
+| `GET /api/health`, `GET /health`, `GET /` | unrestricted | Health probes and minimal metadata used by the frontend bootstrap. |
 
-**Why llama-3.3-70b-versatile?**
-- **70B Parameters**: Large enough for complex business analysis and semantic understanding
-- **Versatile Variant**: Optimized for diverse tasks (extraction, summarization, Q&A)
-- **Structured Outputs**: Works excellently with LangChain's structured output features
-- **Context Window**: 128k tokens allows processing of lengthy web pages
-- **Multilingual**: Strong performance across multiple languages
+Requests must include `Authorization: Bearer <API_SECRET_KEY>`.
 
-**Alternative Models Considered:**
-- **OpenAI GPT-4**: More expensive, slower, overkill for this use case
-- **Anthropic Claude**: Excellent but costly, rate limits more restrictive
-- **Llama 3.1 405B**: Too large and slow for real-time web analysis
-- **Gemini**: Good but Groq's speed advantage is crucial for user experience
+### `/api/analyze` Response Shape
 
-**Why LangChain?**
-1. **Structured Outputs**: Pydantic models ensure consistent JSON responses
-2. **Prompt Management**: Reusable prompt templates
-3. **Error Handling**: Built-in retry logic and error handling
-4. **Conversation Memory**: Easy conversation history management
-5. **Extensibility**: Can swap LLM providers without code changes
-
-**Why Unstructured?**
-1. **Superior HTML Parsing**: Better than BeautifulSoup for complex layouts
-2. **Element Classification**: Automatically identifies titles, headings, content
-3. **Content Chunking**: Intelligent text segmentation by semantic meaning
-4. **Production Ready**: Handles edge cases and malformed HTML gracefully
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- Python 3.9+
-- Groq API key
-
-### Environment Variables
-
-Create a `.env.local` file in the root directory:
-
-\`\`\`env
-# Server-side only (never exposed to client)
-API_URL=http://localhost:8000
-API_SECRET_KEY=your-secret-key-here
-GROQ_API_KEY=gsk_YOUR_KEY
-\`\`\`
-
-**Security Note:** All API keys are kept server-side only using Next.js Server Actions. The frontend never has direct access to sensitive credentials.
-
-### Installation
-
-1. Install frontend dependencies:
-\`\`\`bash
-npm install
-\`\`\`
-
-2. Install backend dependencies:
-\`\`\`bash
-cd api
-uv sync
-\`\`\`
-
-### Development
-
-**Important:** You need to run BOTH the frontend and backend servers for the application to work.
-
-#### Option 1: Run both servers manually (Recommended for debugging)
-
-**Terminal 1 - Start the FastAPI backend:**
-\`\`\`bash
-cd api
-uvicorn index:app --reload --port 8000
-\`\`\`
-
-You should see:
-\`\`\`
-INFO:     Uvicorn running on http://127.0.0.1:8000
-INFO:     Application startup complete.
-\`\`\`
-
-**Terminal 2 - Start the Next.js frontend:**
-\`\`\`bash
-npm run dev
-\`\`\`
-
-You should see:
-\`\`\`
-  ▲ Next.js 14.2.25
-  - Local:        http://localhost:3000
-\`\`\`
-
-#### Option 2: Use the dev script (runs both)
-
-\`\`\`bash
-npm run dev:all
-\`\`\`
-
-Visit `http://localhost:3000` to use the application.
-
-### Troubleshooting
-
-**"Failed to fetch" error:**
-- Make sure the FastAPI backend is running on port 8000
-- Check that `API_URL=http://localhost:8000` is set in `.env.local`
-- Check that `API_SECRET_KEY` is set in `.env.local`
-- Verify the backend is accessible: `curl http://localhost:8000/health`
-
-**"API_SECRET_KEY is not configured" error:**
-- Create a `.env.local` file in the root directory
-- Add `API_SECRET_KEY=your-secret-key-here` (use any string for local dev)
-
-**Backend won't start:**
-- Make sure Python dependencies are installed: `cd api && uv sync`
-- Check that you're in the `api` directory when running uvicorn
-- Verify Python version: `python --version` (should be 3.9+)
-
-**Module not found errors:**
-- Frontend: Run `npm install`
-- Backend: Run `cd api && uv sync`
-
-## API Endpoints
-
-### POST /api/analyze
-Analyze a website and extract business insights using LangChain and Unstructured.
-
-**Request:**
-\`\`\`json
-{
-  "url": "https://example.com",
-  "questions": ["What is their pricing model?", "Who are their main competitors?"]
-}
-\`\`\`
-
-**Headers:**
-\`\`\`
-Authorization: Bearer your-secret-key-here
-Content-Type: application/json
-\`\`\`
-
-**Response:**
-\`\`\`json
+```jsonc
 {
   "url": "https://example.com",
   "insights": {
-    "industry": "SaaS",
+    "summary": "...",
+    "industry": "Software-as-a-Service",
     "company_size": "Medium",
-    "location": "San Francisco, CA",
-    "usp": "AI-powered analytics platform",
-    "products_services": "Data analytics and visualization tools",
-    "target_audience": "Enterprise businesses",
-    "sentiment": "Professional and innovative",
+    "location": "Austin, TX",
+    "usp": "AI-native workflow automation",
+    "products_services": "Automation studio, integrations marketplace",
+    "target_audience": "Revenue operations teams",
+    "sentiment": "Innovative and confident",
     "contact_info": {
-      "emails": ["contact@example.com"],
-      "phones": ["555-0123"],
-      "social_media": ["https://twitter.com/example"]
+      "emails": ["hello@example.com"],
+      "phones": ["+1 512-555-0101"],
+      "contact_urls": ["https://example.com/contact"],
+      "addresses": ["123 Main Street, Austin, TX"],
+      "social_media": {"linkedin": ["https://linkedin.com/company/example"]}
     },
     "custom_answers": {
-      "What is their pricing model?": "Subscription-based with tiered plans",
-      "Who are their main competitors?": "Tableau, Power BI, Looker"
+      "What is their pricing model?": "Subscription tiers with annual billing options"
+    },
+    "source_chunks": {
+      "industry": [{"chunk_index": 2, "chunk_text": "...", "relevance_score": 0.87}],
+      "What is their pricing model?": [{"chunk_index": 5, "chunk_text": "..."}]
     }
   },
-  "timestamp": "2025-01-10T12:00:00"
+  "timestamp": "2025-10-03T22:14:05.123456+00:00"
 }
-\`\`\`
+```
 
-**cURL Example:**
-\`\`\`bash
-curl -X POST https://your-backend.railway.app/api/analyze \\
-  -H "Authorization: Bearer your-secret-key-here" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "url": "https://example.com",
-    "questions": ["What is their pricing model?"]
-  }'
-\`\`\`
+### `/api/chat` Request/Response
 
-**Python Example:**
-\`\`\`python
-import requests
-
-url = "https://your-backend.railway.app/api/analyze"
-headers = {
-    "Authorization": "Bearer your-secret-key-here",
-    "Content-Type": "application/json"
-}
-data = {
-    "url": "https://example.com",
-    "questions": ["What is their pricing model?"]
-}
-
-response = requests.post(url, headers=headers, json=data)
-print(response.json())
-\`\`\`
-
-**JavaScript Example:**
-\`\`\`javascript
-const response = await fetch('https://your-backend.railway.app/api/analyze', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer your-secret-key-here',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    url: 'https://example.com',
-    questions: ['What is their pricing model?']
-  })
-});
-
-const data = await response.json();
-console.log(data);
-\`\`\`
-
-### POST /api/chat
-Ask follow-up questions about an analyzed website with conversation context.
-
-**Request:**
-\`\`\`json
+```jsonc
+// Request body
 {
   "url": "https://example.com",
-  "query": "Who are their main competitors?",
+  "query": "Who are their primary competitors?",
   "conversation_history": [
-    {"role": "user", "content": "What do they sell?"},
-    {"role": "assistant", "content": "They sell AI-powered analytics tools."}
+    {"role": "user", "content": "What do they build?"},
+    {"role": "assistant", "content": "They specialise in workflow automation software."}
   ]
 }
-\`\`\`
 
-**Headers:**
-\`\`\`
-Authorization: Bearer your-secret-key-here
-Content-Type: application/json
-\`\`\`
-
-**Response:**
-\`\`\`json
+// Response
 {
   "url": "https://example.com",
-  "query": "Who are their main competitors?",
-  "response": "Based on the website content, their main competitors include Tableau, Microsoft Power BI, and Looker. They differentiate themselves through AI-powered insights and easier integration with existing tools.",
-  "timestamp": "2025-01-10T12:05:00"
+  "query": "Who are their primary competitors?",
+  "response": "Competitive messaging references Zapier, Make.com, and Workato as direct alternatives.",
+  "timestamp": "2025-10-03T22:16:12.009812+00:00"
 }
-\`\`\`
-
-**cURL Example:**
-\`\`\`bash
-curl -X POST https://your-backend.railway.app/api/chat \\
-  -H "Authorization: Bearer your-secret-key-here" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "url": "https://example.com",
-    "query": "Who are their main competitors?"
-  }'
-\`\`\`
-
-**Python Example:**
-\`\`\`python
-import requests
-
-url = "https://your-backend.railway.app/api/chat"
-headers = {
-    "Authorization": "Bearer your-secret-key-here",
-    "Content-Type": "application/json"
-}
-data = {
-    "url": "https://example.com",
-    "query": "Who are their main competitors?",
-    "conversation_history": [
-        {"role": "user", "content": "What do they sell?"},
-        {"role": "assistant", "content": "They sell AI-powered analytics tools."}
-    ]
-}
-
-response = requests.post(url, headers=headers, json=data)
-print(response.json())
-\`\`\`
-
-## Architecture
-
-### System Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Client Browser                           │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             │ HTTPS
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Next.js Frontend (Vercel)                     │
-│  ┌────────────────┐  ┌─────────────┐  ┌──────────────────┐    │
-│  │  Analyzer Form │  │  Insights   │  │  Chat Interface  │    │
-│  │   Component    │  │   Display   │  │    Component     │    │
-│  └────────────────┘  └─────────────┘  └──────────────────┘    │
-│           │                                      │               │
-│           │         Server Actions               │               │
-│           └──────────────┬───────────────────────┘               │
-└──────────────────────────┼─────────────────────────────────────┘
-                           │
-                           │ API Calls (Bearer Token Auth)
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   FastAPI Backend (Railway)                      │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │              API Endpoints (Rate Limited)                │  │
-│  │  ┌────────────────┐         ┌─────────────────────┐    │  │
-│  │  │ POST /analyze  │         │  POST /chat         │    │  │
-│  │  │ (10/min)       │         │  (20/min)           │    │  │
-│  │  └────────┬───────┘         └──────────┬──────────┘    │  │
-│  └───────────┼────────────────────────────┼───────────────┘  │
-│              │                             │                   │
-│  ┌───────────▼──────────────┐  ┌──────────▼──────────────┐   │
-│  │   WebsiteScraper         │  │  ConversationalAgent    │   │
-│  │   - Fetch HTML           │  │  - Context Management   │   │
-│  │   - Custom Headers       │  │  - Conversation History │   │
-│  └───────────┬──────────────┘  └──────────┬──────────────┘   │
-│              │                             │                   │
-│  ┌───────────▼──────────────┐              │                   │
-│  │   Unstructured Parser    │              │                   │
-│  │   - HTML Processing      │              │                   │
-│  │   - Content Extraction   │              │                   │
-│  │   - Title Chunking       │              │                   │
-│  └───────────┬──────────────┘              │                   │
-│              │                             │                   │
-│  ┌───────────▼─────────────────────────────▼──────────────┐   │
-│  │              LangChain + Groq LLM                       │   │
-│  │              (llama-3.3-70b-versatile)                  │   │
-│  │  - Structured Output (Pydantic)                         │   │
-│  │  - Business Insights Extraction                         │   │
-│  │  - Question Answering                                   │   │
-│  │  - Semantic Analysis                                    │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Rate Limiting
-All rate limiting is handled on the **backend** using SlowAPI:
-- Analysis endpoint: 10 requests per minute per IP
-- Chat endpoint: 20 requests per minute per IP
+The frontend’s “Generate Business Report” button simply poses a long-form question to `/api/chat`, demonstrating how richer deliverables can be layered on without new endpoints.
 
-### Document Processing Pipeline
-1. **Web Scraping**: Fetch HTML content with custom headers
-2. **Unstructured Parsing**: Extract structured elements (titles, headings, content)
-3. **Content Chunking**: Organize content by title for better context
-4. **LangChain Analysis**: Structured AI extraction with Pydantic models using Groq's llama-3.3-70b-versatile
-5. **Response Formatting**: Return JSON with business insights
+---
 
-## Deployment
+## Local Development
 
-### Deploy to Vercel
+### 1. Prerequisites
 
-1. Push your code to GitHub
-2. Import the project in Vercel
-3. Add environment variables in Project Settings (gear icon → Environment Variables):
-   - `API_SECRET_KEY` - Your API authentication secret
-   - `GROQ_API_KEY` - Your Groq API key
-   - `API_URL` - Your FastAPI backend URL (optional, defaults to same domain)
-4. Deploy
+- Node.js 18+
+- pnpm 8+ (or npm/yarn if you prefer, but the lockfile is pnpm)
+- Python 3.10+
+- [uv](https://github.com/astral-sh/uv) (preferred) or pip for Python dependency management
+- Groq API key (required) and, optionally, a Firecrawl API key for richer scraping
 
-Both the Next.js frontend and FastAPI backend will be deployed together on Vercel.
+### 2. Environment Variables
 
-## Technologies
+Copy `.env.example` to `.env.local` in the repo root and fill in the secrets:
 
-- **LangChain**: AI orchestration, structured outputs, conversation management
-- **Groq**: Fast LLM inference with llama-3.3-70b-versatile model
-- **Unstructured**: Advanced HTML parsing, content extraction, document chunking
-- **FastAPI**: High-performance Python API framework
-- **Next.js**: React framework with Server Actions
+```env
+API_URL=http://localhost:8000
+API_SECRET_KEY=dev-secret-key
+GROQ_API_KEY=gsk_YOUR_KEY
+FIRECRAWL_API_KEY=fc_YOUR_KEY          # optional but recommended
+DEEPINFRA_API_KEY=di_OPTIONAL_KEY     # optional, used for extended semantic features
+```
 
-## Development Environment
+The same file is consumed by server actions in the Next.js app and the FastAPI backend.
 
-- **IDE**: Visual Studio Code
-- **Recommended Extensions**:
-  - Python (Microsoft)
-  - Pylance
-  - ESLint
-  - Prettier
-  - Tailwind CSS IntelliSense
+### 3. Install Dependencies
 
-## Future Enhancements (Easy to Add)
+```bash
+# Frontend
+pnpm install   # or npm install
 
-The application is designed with extensibility in mind. Here are potential enhancements that can be added without major refactoring:
+# Backend
+uv sync        # creates an isolated .venv based on pyproject.toml / uv.lock
+```
 
-### Multi-Page Scraping
-- **Current**: Analyzes homepage only for fast, focused insights
-- **Extension**: Add breadth-first crawling to analyze entire websites
-- **Use Case**: Deep company research, comprehensive product catalogs
+### 4. Run the Stack
 
-### Web Search Integration
-- **Current**: Analyzes provided URL only
-- **Extension**: Integrate Tavily/SerpAPI for broader context
-- **Use Case**: Answer questions beyond homepage (e.g., "Who owns this company?")
+```bash
+# Terminal 1 – FastAPI (reload on change)
+uv run --project . uvicorn api.index:app --reload --port 8000
 
-### Enhanced Data Extraction
-- **Current**: Core business fields + custom questions
-- **Extension**: Company relationships, funding history, executive team
-- **Use Case**: Investment research, competitive analysis
+# Terminal 2 – Next.js frontend
+pnpm dev       # serves http://localhost:3000
+```
 
-### Export & Integration
-- **Current**: JSON API responses
-- **Extension**: CSV/PDF exports, CRM integrations, webhooks
-- **Use Case**: Batch processing, automated workflows
+The frontend performs a health check before every API call; if the backend is unreachable or misconfigured it will surface actionable guidance in the UI.
 
-### Caching & Performance
-- **Current**: Simple in-memory cache
-- **Extension**: Redis caching, database storage, result persistence
-- **Use Case**: Scale to high traffic, faster repeat queries
-
-> All enhancements maintain backward compatibility and can be toggled via API parameters.
+---
 
 ## Testing
 
-### Running Tests
+The backend ships with a comprehensive, fixture-driven API test suite located at `api/test_api.py`.
 
-1. Install test dependencies:
 ```bash
-cd api
-uv sync --extra test
+# Run the whole suite with uv (preferred)
+uv run --project . pytest api/test_api.py -v
+
+# Optional: coverage report
+uv run --project . pytest api/test_api.py --cov=api --cov-report=term-missing
 ```
 
-2. Run all tests:
-```bash
-pytest api/test_api.py -v
-```
+Tests cover:
 
-3. Run tests with coverage:
-```bash
-pytest api/test_api.py --cov=api --cov-report=html
-```
+- Authentication failures and success paths
+- Request validation (invalid URLs, missing fields)
+- `/api/analyze` orchestration, including custom question augmentation
+- `/api/chat` conversational flows with history
+- Integration with the cached orchestrator + chat agent stubs
+- Health endpoints and rate limiting semantics
 
-4. Run specific test class:
-```bash
-pytest api/test_api.py::TestAuthentication -v
-```
+---
 
-### Test Coverage
+## Deployment Notes
 
-The test suite includes comprehensive coverage for:
-- ✅ **Authentication & Authorization**: Bearer token validation
-- ✅ **Input Validation**: Pydantic model validation
-- ✅ **API Endpoints**: Both `/api/analyze` and `/api/chat`
-- ✅ **Error Handling**: Graceful error responses
-- ✅ **Rate Limiting**: Protection against abuse
-- ✅ **Health Checks**: Service availability monitoring
+- **Frontend** – Designed for Vercel (uses server actions and edge-friendly APIs). Supply the same environment variables via Vercel’s dashboard.
+- **Backend** – Can run on Railway, Fly.io, Render, or any container-friendly host. Rate limiting relies on in-memory counters by default; for clustered deployments configure a SlowAPI-compatible backend (Redis, Memcached, etc.).
+- **Secrets management** – Set `API_SECRET_KEY`, `GROQ_API_KEY`, and optional API keys in your hosting provider
 
-### Test Structure
+---
 
-```
-api/
-├── test_api.py                    # Comprehensive test suite
-│   ├── TestAuthentication         # Auth tests
-│   ├── TestValidation            # Input validation tests
-│   ├── TestAnalyzeEndpoint       # Analysis endpoint tests
-│   ├── TestChatEndpoint          # Chat endpoint tests
-│   ├── TestHealthEndpoints       # Health check tests
-│   ├── TestRateLimiting          # Rate limit tests
-│   └── TestErrorHandling         # Error handling tests
-└── requirements-test.txt          # Test dependencies
-```
+## Future Enhancements
 
-## License
+- Multi-page crawling with domain guards and queue limits
+- Pluggable semantic search (e.g., DeepInfra or OpenAI embeddings stored in vector DBs)
+- Export routes for saved analyses (CSV/PDF/webhook)
+- Workspace persistence (swap in Postgres/Redis for the in-memory `AnalysisStore`)
 
-MIT
+
