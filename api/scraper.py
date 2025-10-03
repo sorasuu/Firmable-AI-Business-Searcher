@@ -750,6 +750,11 @@ class WebsiteScraper:
                 continue
 
             combined = urljoin(base_url, href) if base_url else href
+            parsed = urlparse(combined)
+            scheme = parsed.scheme.lower()
+            if scheme and scheme not in ("http", "https"):
+                continue
+
             lower = combined.lower()
             if any(keyword in lower for keyword in keywords):
                 candidates.append(combined)
@@ -765,6 +770,11 @@ class WebsiteScraper:
 
     def _fetch_contact_page_text(self, url: str) -> Optional[str]:
         if not url:
+            return None
+
+        parsed = urlparse(url)
+        scheme = parsed.scheme.lower()
+        if scheme and scheme not in ("http", "https"):
             return None
 
         try:

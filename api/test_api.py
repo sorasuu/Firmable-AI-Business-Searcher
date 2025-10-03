@@ -163,8 +163,9 @@ class TestAnalyzeEndpoint:
         assert data["insights"]["industry"] == "Technology"
     
     @patch('api.scraper.WebsiteScraper.scrape_website')
+    @patch('api.chat.ConversationalAgent.answer_question_with_sources')
     @patch('api.analyzer.AIAnalyzer.analyze_website')
-    def test_analysis_with_custom_questions(self, mock_analyze, mock_scrape):
+    def test_analysis_with_custom_questions(self, mock_analyze, mock_answer_question, mock_scrape):
         """Test analysis with custom questions."""
         mock_scrape.return_value = {"content": "test"}
         mock_analyze.return_value = {
@@ -172,6 +173,12 @@ class TestAnalyzeEndpoint:
             "custom_answers": {
                 "pricing": "Subscription-based"
             }
+        }
+        mock_answer_question.return_value = {
+            "answer": "Pricing is subscription-based",
+            "source_chunks": [
+                {"chunk_index": 0, "chunk_text": "Pricing details", "relevance_score": 0.9}
+            ]
         }
         
         response = client.post(
@@ -186,6 +193,7 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 200
         # Verify that analyze_website was called with questions
         assert mock_analyze.called
+        mock_answer_question.assert_called()
     
     @patch('api.scraper.WebsiteScraper.scrape_website')
     def test_scraping_failure(self, mock_scrape):

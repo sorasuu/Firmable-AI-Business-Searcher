@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl, ValidationError
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import os
 from datetime import datetime
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -152,16 +152,101 @@ async def analyze_website(
         insights = analyzer.analyze_website(scraped_data, data.questions)
         
         chat_agent.cache_website_data(str(data.url), scraped_data, insights)
+
+        if data.questions:
+            existing_answers = dict(insights.get('custom_answers') or {})
+            updated_answers = dict(existing_answers)
+            source_chunks = dict(insights.get('source_chunks') or {})
+
+            for question in data.questions[:5]:
+                result = chat_agent.answer_question_with_sources(str(data.url), question)
+                if result:
+                    updated_answers[question] = result['answer']
+                    source_chunks[question] = result.get('source_chunks', [])
+                elif question not in updated_answers and question in existing_answers:
+                    updated_answers[question] = existing_answers[question]
+
+            if updated_answers:
+                insights['custom_answers'] = updated_answers
+            if source_chunks:
+                insights['source_chunks'] = source_chunks
+
+        contact_result = chat_agent.extract_contact_profile(str(data.url))
+        if contact_result and contact_result.get('contact_info'):
+            existing_contact = dict(insights.get('contact_info') or {})
+            merged_contact = merge_contact_info(existing_contact, contact_result['contact_info'])
+            insights['contact_info'] = merged_contact
+
+            source_chunks = dict(insights.get('source_chunks') or {})
+            source_chunks['contact_info'] = contact_result.get('source_chunks', [])
+            insights['source_chunks'] = source_chunks
         
         return AnalysisResponse(
             url=str(data.url),
             insights=insights,
             timestamp=datetime.utcnow().isoformat()
         )
-        
+
     except Exception as e:
         print(f"[API] Error analyzing website: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+def merge_contact_info(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(existing)
+
+    def merge_list(key: str) -> None:
+        existing_list = existing.get(key) or []
+        update_list = updates.get(key) or []
+        if not isinstance(existing_list, list):
+            existing_list = [existing_list] if existing_list else []
+        if not isinstance(update_list, list):
+            update_list = [update_list] if update_list else []
+        combined = []
+        seen: set[str] = set()
+        for item in [*existing_list, *update_list]:
+            if not item:
+                continue
+            text = str(item).strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered not in seen:
+                seen.add(lowered)
+                combined.append(text)
+        if combined:
+            merged[key] = combined
+
+    for key in ('emails', 'phones', 'contact_urls', 'addresses'):
+        merge_list(key)
+
+    existing_social = existing.get('social_media') or {}
+    update_social = updates.get('social_media') or {}
+    social_merged: Dict[str, List[str]] = {}
+    if isinstance(existing_social, dict):
+        for network, links in existing_social.items():
+            if links:
+                social_merged[network] = list(links)
+    if isinstance(update_social, dict):
+        for network, links in update_social.items():
+            existing_links = social_merged.get(network, [])
+            combined = existing_links + (list(links) if isinstance(links, list) else [links])
+            deduped: List[str] = []
+            seen_links: set[str] = set()
+            for link in combined:
+                text = str(link).strip()
+                if not text:
+                    continue
+                lowered = text.lower()
+                if lowered not in seen_links:
+                    seen_links.add(lowered)
+                    deduped.append(text)
+            if deduped:
+                social_merged[network] = deduped
+    if social_merged:
+        merged['social_media'] = social_merged
+
+    return merged
 
 @app.post("/api/chat", response_model=ConversationResponse)
 @limiter.limit("20/minute")
