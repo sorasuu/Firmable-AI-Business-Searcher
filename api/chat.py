@@ -1,19 +1,20 @@
 from typing import Dict, List, Optional
 import os
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
 from langchain.memory import ConversationBufferMemory
 from api.agent_tools import create_agent_executor
+from api.groq_services import GroqCompoundClient
 
 class ConversationalAgent:
-    def __init__(self):
-        self.llm = ChatOpenAI(
-            model="openai/gpt-oss-20b",
+    def __init__(self, groq_client: Optional[GroqCompoundClient] = None):
+        self.llm = ChatGroq(
+            model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b"),
             temperature=0.2,
-            api_key=os.environ.get("GROQ_API_KEY", ""),
-            base_url="https://api.groq.com/openai/v1"
+            groq_api_key=os.environ.get("GROQ_API_KEY", "")
         )
+        self.groq_client = groq_client or GroqCompoundClient()
         
         # Simple in-memory cache for website data
         self.website_cache = {}
@@ -47,7 +48,8 @@ class ConversationalAgent:
             agent_executor = create_agent_executor(
                 self.llm,
                 cached.get('scraped_data', {}),
-                cached.get('insights', {})
+                cached.get('insights', {}),
+                groq_client=self.groq_client
             )
             
             # Convert history to LangChain format
@@ -135,6 +137,18 @@ If you don't have specific information to answer a question, say so honestly."""
             context_parts.append(f"- Emails: {', '.join(contact['emails'])}")
         if contact.get('phones'):
             context_parts.append(f"- Phones: {', '.join(contact['phones'])}")
+
+        live_visit = insights.get('groq_live_visit')
+        if isinstance(live_visit, dict) and live_visit.get('content'):
+            context_parts.append("\nLive Website Snapshot (Groq Visit):")
+            context_parts.append(live_visit['content'][:1500])
+
+        live_browser = insights.get('groq_browser_research')
+        if isinstance(live_browser, dict) and live_browser:
+            context_parts.append("\nLive Browser Research Highlights:")
+            for question, data in list(live_browser.items())[:2]:
+                if isinstance(data, dict) and data.get('content'):
+                    context_parts.append(f"- {question}: {data['content'][:400]}")
         
         # Add main content snippet
         main_content = scraped.get('main_content', '')[:1500]

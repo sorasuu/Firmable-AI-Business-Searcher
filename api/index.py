@@ -16,6 +16,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env.loca
 from api.scraper import WebsiteScraper
 from api.analyzer import AIAnalyzer
 from api.chat import ConversationalAgent
+from api.groq_services import GroqCompoundClient
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -79,8 +80,9 @@ def verify_auth(authorization: Optional[str] = Header(None)):
 
 # Initialize services
 scraper = WebsiteScraper()
-analyzer = AIAnalyzer()
-chat_agent = ConversationalAgent()
+groq_client = GroqCompoundClient()
+analyzer = AIAnalyzer(groq_client=groq_client)
+chat_agent = ConversationalAgent(groq_client=groq_client)
 
 # Custom exception handler for validation errors
 @app.exception_handler(ValidationError)

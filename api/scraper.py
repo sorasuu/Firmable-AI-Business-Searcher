@@ -1,573 +1,670 @@
-from typing import Dict, Optional, List
-import requests
-from unstructured.partition.html import partition_html
-from unstructured.chunking.title import chunk_by_title
-from unstructured.chunking.basic import chunk_elements
-import re
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
+﻿from typing import Dict, Optional, List, Tuple, Any
 import os
-from flashrank import Ranker, RerankRequest
-from bs4 import BeautifulSoup
+import re
 import json
+from collections import OrderedDict
+import requests
+from bs4 import BeautifulSoup
+import html2text
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env.local"))
+except ImportError:
+    pass
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env.local"))
+except ImportError:
+    pass
+try:
+    from firecrawl.firecrawl import FirecrawlApp
+    FIRECRAWL_AVAILABLE = True
+except ImportError:
+    try:
+        from firecrawl import FirecrawlApp
+        FIRECRAWL_AVAILABLE = True
+    except ImportError:
+        FIRECRAWL_AVAILABLE = False
+        FirecrawlApp = None
+from langchain_groq import ChatGroq
+from langchain.prompts import ChatPromptTemplate
+from urllib.parse import urlparse, urljoin
+
 
 class WebsiteScraper:
+    """Web scraper using Firecrawl API with BeautifulSoup fallback"""
+    
     def __init__(self, llm=None):
+        # Initialize Firecrawl if available
+        self.use_firecrawl = False
+        self.app = None
+        
+        if FIRECRAWL_AVAILABLE:
+            firecrawl_api_key = os.environ.get("FIRECRAWL_API_KEY", "")
+            if firecrawl_api_key:
+                try:
+                    self.app = FirecrawlApp(api_key=firecrawl_api_key)
+                    self.use_firecrawl = True
+                    print("[SCRAPER] Firecrawl initialized successfully")
+                except Exception as e:
+                    print(f"[SCRAPER] Firecrawl initialization failed: {e}. Will use fallback scraper.")
+            else:
+                print("[SCRAPER] No FIRECRAWL_API_KEY found. Using fallback scraper.")
+        else:
+            print("[SCRAPER] Firecrawl not available. Using fallback scraper.")
+        
+        # Initialize BeautifulSoup fallback tools
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        self.llm = llm or ChatOpenAI(
-            model="openai/gpt-oss-20b",
+        self.html_converter = html2text.HTML2Text()
+        self.html_converter.ignore_links = False
+        
+        # Initialize cache
+        self.cache_file = os.path.join(os.path.dirname(__file__), "scraper_cache.jsonl")
+        self.cache = self._load_cache()
+        self.html_converter.ignore_images = True
+        self.html_converter.ignore_emphasis = False
+        
+        # Initialize LLM for additional processing
+        self.llm = llm or ChatGroq(
+            model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b"),
             temperature=0.1,
-            api_key=os.environ.get("GROQ_API_KEY", ""),
-            base_url="https://api.groq.com/openai/v1"
+            groq_api_key=os.environ.get("GROQ_API_KEY", "")
         )
+    
+    def _load_cache(self) -> Dict:
+        """Load cache from JSONL file with recovery for malformed lines"""
+        cache: Dict[str, Dict] = {}
+        if not os.path.exists(self.cache_file):
+            return cache
 
-        # Initialize FlashRank reranker
-        self.ranker = Ranker(model_name="ms-marco-TinyBERT-L-2-v2", cache_dir=".cache")
+        sanitized_entries: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        needs_rewrite = False
+
+        try:
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                for line_number, raw_line in enumerate(f, start=1):
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+
+                    entries, complete = self._parse_cache_line(stripped)
+                    if len(entries) != 1 or not complete:
+                        needs_rewrite = True
+
+                    if not entries:
+                        needs_rewrite = True
+                        print(f"[CACHE] Skipping unreadable line {line_number}: {stripped[:80]}...")
+                        continue
+
+                    for entry in entries:
+                        if not isinstance(entry, dict):
+                            needs_rewrite = True
+                            print(f"[CACHE] Invalid cache entry on line {line_number}; expected object, got {type(entry)}")
+                            continue
+
+                        url_value = entry.get('url')
+                        data_value = entry.get('data')
+
+                        if not url_value or data_value is None:
+                            needs_rewrite = True
+                            print(f"[CACHE] Missing url or data in cache entry on line {line_number}")
+                            continue
+
+                        cache[url_value] = data_value
+
+                        sanitized_entry = {'url': url_value, 'data': data_value}
+                        if 'timestamp' in entry:
+                            sanitized_entry['timestamp'] = entry['timestamp']
+                        sanitized_entries[url_value] = sanitized_entry
+                        sanitized_entries.move_to_end(url_value)
+
+            if needs_rewrite:
+                self._rewrite_cache_file(list(sanitized_entries.values()))
+
+            print(f"[CACHE] Loaded {len(cache)} cached entries")
+        except Exception as e:
+            print(f"[CACHE] Error loading cache: {e}")
+
+        return cache
+    
+    def _save_to_cache(self, url: str, data: Dict):
+        """Save scraped data to cache"""
+        try:
+            entry = {
+                'url': url,
+                'data': data,
+                'timestamp': json.dumps({'timestamp': None})  # Could add actual timestamp
+            }
+            with open(self.cache_file, 'a', encoding='utf-8') as f:
+                json.dump(entry, f, ensure_ascii=False)
+                f.write('\n')
+            self.cache[url] = data
+            print(f"[CACHE] Saved {url} to cache")
+        except Exception as e:
+            print(f"[CACHE] Error saving to cache: {e}")
+
+    def _parse_cache_line(self, line: str) -> Tuple[List[Dict[str, Any]], bool]:
+        """Parse one or more JSON objects from a cache line."""
+        stripped = line.strip()
+        if not stripped:
+            return [], True
+
+        decoder = json.JSONDecoder()
+        entries: List[Dict[str, Any]] = []
+        idx = 0
+        length = len(stripped)
+
+        while idx < length:
+            try:
+                obj, next_idx = decoder.raw_decode(stripped, idx)
+            except json.JSONDecodeError:
+                # Return whatever we managed to parse; caller decides on rewrite
+                return entries, False
+
+            entries.append(obj)
+            idx = next_idx
+            while idx < length and stripped[idx] in (' ', '\t'):
+                idx += 1
+
+        return entries, True
+
+    def _rewrite_cache_file(self, entries: List[Dict[str, Any]]):
+        """Rewrite cache file with sanitized entries to prevent future parse errors."""
+        try:
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                for entry in entries:
+                    json.dump(entry, f, ensure_ascii=False)
+                    f.write('\n')
+            print(f"[CACHE] Rewrote cache with {len(entries)} entries")
+        except Exception as e:
+            print(f"[CACHE] Failed to rewrite cache: {e}")
+    
+    def _get_from_cache(self, url: str) -> Optional[Dict]:
+        """Get data from cache if available"""
+        return self.cache.get(url)
     
     def scrape_website(self, url: str) -> Dict:
-        """Scrape website content using Unstructured with improved chunking and reranking"""
+        """
+        Scrape website using Firecrawl's intelligent extraction.
+        Firecrawl handles JavaScript rendering, anti-bot detection, and smart content extraction.
+        """
+        # Check cache first
+        cached_data = self._get_from_cache(url)
+        if cached_data:
+            print(f"[CACHE] Using cached data for {url}")
+            return cached_data
+        
         try:
-            # Fetch the HTML content
-            response = requests.get(url, headers=self.headers, timeout=15)
-            response.raise_for_status()
-
-            # Keep the full HTML content
-            full_html = response.text
-
-            # Use Unstructured to partition the HTML into document elements
-            elements = partition_html(text=full_html, url=url, include_metadata=True)
-
-            # Create chunks using basic chunking for better control
-            chunks = chunk_elements(
-                elements,
-                max_characters=1500,  # Smaller chunks for better reranking
-                overlap=200,  # Some overlap to maintain context
-                new_after_n_chars=1400
+            print(f"[SCRAPER] Starting Firecrawl scrape for: {url}")
+            
+            # Use Firecrawl's scrape endpoint with all features enabled
+            scrape_result = self.app.scrape(
+                url,
+                formats=["markdown", "html", "links"],
+                only_main_content=False,
+                wait_for=2000,
             )
-
-            # Convert chunks to text for processing
-            chunk_texts = [str(chunk) for chunk in chunks]
-
-            # Clean and filter chunks to remove code-heavy content
-            cleaned_chunks = self._clean_chunks(chunk_texts)
-
-            # Use FlashRank to rerank chunks by relevance to business analysis
-            reranked_chunks = self._rerank_chunks(cleaned_chunks, url)
-
-            # Extract all links from the page
-            all_links = self._extract_all_links(full_html, url)
             
-            # Extract structured data
-            data = {
-                'url': url,
-                'title': self._extract_title(elements),
-                'headings': self._extract_headings(elements),
-                'main_content': self._extract_content(reranked_chunks),
-                'footer_content': self._extract_footer_content(elements),
-                'metadata': self._extract_metadata(elements),
-                'contact_info': self._extract_contact_info(full_html, elements),
-                'all_links': all_links,  # All extracted links with categories
-                'full_html': full_html,  # Keep the complete HTML
-                'structured_chunks': reranked_chunks[:15],  # Top 15 reranked chunks
-                'total_chunks': len(reranked_chunks)
-            }
-
-            return data
-
-        except Exception as e:
-            raise Exception(f"Failed to scrape website: {str(e)}")
-
-    def _rerank_chunks(self, chunks: List[str], url: str) -> List[str]:
-        """Rerank chunks using FlashRank for better relevance to business analysis"""
-        try:
-            # Create query for business analysis relevance
-            query = "business company information products services contact details industry analysis"
-
-            # Prepare passages for reranking
-            passages = []
-            for i, chunk in enumerate(chunks):
-                passages.append({
-                    "id": str(i),
-                    "text": chunk[:2000],  # Limit chunk size for reranking
-                    "meta": {"url": url, "chunk_id": i}
-                })
-
-            # Create rerank request
-            rerank_request = RerankRequest(
-                query=query,
-                passages=passages
-            )
-
-            # Perform reranking
-            results = self.ranker.rerank(rerank_request)
-
-            # Sort chunks by reranking score (highest first)
-            sorted_chunks = []
-            for result in results:
-                chunk_index = int(result["id"])
-                sorted_chunks.append(chunks[chunk_index])
-
-            return sorted_chunks
-
-        except Exception as e:
-            print(f"Reranking failed, using original order: {str(e)}")
-            return chunks
-    
-    def _clean_chunks(self, chunks: List[str]) -> List[str]:
-        """Clean and filter chunks to remove code-heavy or irrelevant content"""
-        cleaned_chunks = []
-        
-        for chunk in chunks:
-            # Skip chunks that are too short
-            if len(chunk.strip()) < 50:
-                continue
+            print(f"[SCRAPER] Firecrawl scrape completed successfully")
             
-            # Skip chunks that appear to be mostly code
-            code_indicators = ['<script', '<style', 'function(', 'var ', 'const ', 'let ', 'import ', 'export ', 'class ', 'def ', 'if __name__']
-            code_lines = 0
-            total_lines = max(1, len(chunk.split('\n')))
+            # Firecrawl returns a Document object with attributes
+            # Access the attributes directly
+            markdown_content = getattr(scrape_result, "markdown", "")
+            html_content = getattr(scrape_result, "html", "")
+            metadata_obj = getattr(scrape_result, "metadata", None)
+            links = getattr(scrape_result, "links", [])
             
-            for line in chunk.split('\n'):
-                line = line.strip()
-                if any(indicator in line for indicator in code_indicators):
-                    code_lines += 1
-            
-            # Skip if more than 30% of lines appear to be code
-            if code_lines / total_lines > 0.3:
-                continue
-            
-            # Skip chunks with excessive HTML tags
-            html_tags = len(re.findall(r'<[^>]+>', chunk))
-            if html_tags > len(chunk.split()) * 0.5:  # More tags than words
-                continue
-            
-            # Clean up the chunk text
-            # Remove excessive whitespace
-            cleaned_chunk = re.sub(r'\s+', ' ', chunk.strip())
-            
-            # Remove HTML tags but keep content
-            cleaned_chunk = re.sub(r'<[^>]+>', ' ', cleaned_chunk)
-            
-            # Clean up again
-            cleaned_chunk = re.sub(r'\s+', ' ', cleaned_chunk).strip()
-            
-            if len(cleaned_chunk) >= 100:  # Keep chunks with substantial content
-                cleaned_chunks.append(cleaned_chunk)
-        
-        return cleaned_chunks[:20]  # Limit to top 20 cleaned chunks
-    
-    def _extract_title(self, elements) -> str:
-        """Extract title from elements"""
-        for element in elements:
-            if hasattr(element, 'category') and element.category == 'Title':
-                return str(element)
-        return ""
-    
-    def _extract_headings(self, elements) -> list:
-        """Extract all headings"""
-        headings = []
-        for element in elements:
-            if hasattr(element, 'category') and element.category in ['Title', 'Header']:
-                headings.append({
-                    'type': element.category,
-                    'text': str(element)
-                })
-        return headings[:15]
-    
-    def _extract_content(self, reranked_chunks: List[str]) -> str:
-        """Extract main content from reranked chunks"""
-        # Use top chunks for main content (reranked for relevance)
-        content_parts = []
-        for chunk in reranked_chunks[:12]:  # Top 12 reranked chunks
-            content_parts.append(chunk)
-        return "\n\n".join(content_parts)
-    
-    def _extract_footer_content(self, elements) -> str:
-        """Extract footer content from document elements"""
-        footer_parts = []
-        for element in elements:
-            # Check if element is in footer based on category or metadata
-            if hasattr(element, 'category') and element.category in ['Footer', 'FooterText']:
-                footer_parts.append(str(element))
-            elif hasattr(element, 'metadata') and element.metadata:
-                # Check metadata for footer indicators
-                if hasattr(element.metadata, 'tag') and element.metadata.tag and 'footer' in element.metadata.tag.lower():
-                    footer_parts.append(str(element))
-                elif hasattr(element.metadata, 'element_id') and element.metadata.element_id and 'footer' in element.metadata.element_id.lower():
-                    footer_parts.append(str(element))
-                elif hasattr(element.metadata, 'class_name') and element.metadata.class_name and any('footer' in cls.lower() for cls in element.metadata.class_name):
-                    footer_parts.append(str(element))
-
-        return "\n".join(footer_parts) if footer_parts else ""
-    
-    def _extract_metadata(self, elements) -> dict:
-        """Extract metadata from elements"""
-        metadata = {}
-        for element in elements:
-            if hasattr(element, 'metadata') and element.metadata:
-                if hasattr(element.metadata, 'page_name'):
-                    metadata['page_name'] = element.metadata.page_name
-                if hasattr(element.metadata, 'languages'):
-                    metadata['languages'] = element.metadata.languages
-                break
-        return metadata
-    
-    def _extract_contact_info(self, html_text: str, elements) -> dict:
-        """Extract contact information using regex, with LLM fallback that includes footer content"""
-        # First try regex extraction
-        contact_info = self._extract_contact_info_regex(html_text)
-        
-        # Validate phone numbers with LLM if we found any
-        if contact_info.get('phones'):
-            print(f"[API] Validating {len(contact_info['phones'])} phone numbers with LLM...")
-            validated_phones = self._validate_phones_with_llm(
-                contact_info['phones'], 
-                html_text[:2000]  # Provide some context
-            )
-            contact_info['phones'] = validated_phones
-        
-        # Check if we found minimal information
-        has_emails = len(contact_info.get('emails', [])) > 0
-        has_phones = len(contact_info.get('phones', [])) > 0
-        has_social = any(contact_info.get('social_media', {}).values())
-        
-        # If regex found good information, return it
-        if has_emails or has_phones or has_social:
-            return contact_info
-        
-        # Otherwise, try LLM extraction as fallback with footer content
-        print("[API] Regex extraction found limited contact info, trying LLM fallback with footer content...")
-        footer_content = self._extract_footer_content(elements)
-        llm_contact_info = self._extract_contact_info_with_llm(html_text, footer_content)
-        
-        # Merge results, preferring regex results where available
-        merged = {
-            'emails': contact_info.get('emails', []) + llm_contact_info.get('emails', []),
-            'phones': contact_info.get('phones', []) + llm_contact_info.get('phones', []),
-            'social_media': {**contact_info.get('social_media', {}), **llm_contact_info.get('social_media', {})}
-        }
-        
-        # Remove duplicates
-        merged['emails'] = list(set(merged['emails']))[:3]
-        
-        # Validate merged phone numbers if any
-        if merged.get('phones'):
-            merged['phones'] = self._validate_phones_with_llm(
-                list(set(merged['phones'])), 
-                html_text[:2000]
-            )
-        else:
-            merged['phones'] = []
-        
-        return merged
-    
-    def _extract_contact_info_regex(self, html_text: str) -> dict:
-        """Extract contact information using regex patterns"""
-        # Extract emails
-        emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', html_text)
-        
-        # Extract phone numbers with improved patterns to avoid timestamps
-        phone_patterns = [
-            r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',  # (123) 456-7890, 123-456-7890, 123.456.7890
-            r'\b\+?\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # +1 123 456 7890, +61 123 456 789
-            r'\b\d{4}[-.\s]?\d{3}[-.\s]?\d{3}\b',  # Australian format: 1234 567 890
-        ]
-        
-        phones = []
-        for pattern in phone_patterns:
-            matches = re.findall(pattern, html_text)
-            phones.extend(matches)
-        
-        # Filter out obvious non-phone numbers (timestamps, IDs, etc.)
-        filtered_phones = []
-        for phone in phones:
-            # Remove all non-digit characters for validation
-            digits_only = re.sub(r'\D', '', phone)
-            
-            # Skip Unix timestamps (10-13 digits, common ranges for 2000s-2020s)
-            if len(digits_only) >= 10 and len(digits_only) <= 13:
-                # Check if it looks like a Unix timestamp (seconds since 1970)
-                try:
-                    timestamp = int(digits_only)
-                    # Unix timestamps from 2000-2025 are roughly 946684800 to 1735689600
-                    if 946684800 <= timestamp <= 1735689600:
-                        continue
-                except ValueError:
-                    pass
-            
-            # Skip if it looks like an ID or timestamp (too many identical digits, sequential, etc.)
-            if len(digits_only) >= 10:
-                # Check for obvious patterns that aren't phone numbers
-                if digits_only.isdigit():
-                    # Skip sequential numbers (1234567890, 9876543210, etc.)
-                    if digits_only in ['1234567890', '0987654321', '0123456789', '9876543210']:
-                        continue
-                    # Skip numbers with too many repeated digits
-                    if any(digits_only.count(d) > 6 for d in '0123456789'):
-                        continue
-            
-            filtered_phones.append(phone)
-        
-        phones = filtered_phones
-        
-        # Extract social media links - Enhanced with more platforms
-        social_patterns = {
-            'twitter': r'https?://(?:www\.)?(?:twitter|x)\.com/[\w]+',
-            'linkedin': r'https?://(?:www\.)?linkedin\.com/(?:company|in)/[\w-]+',
-            'facebook': r'https?://(?:www\.)?facebook\.com/[\w.]+',
-            'instagram': r'https?://(?:www\.)?instagram\.com/[\w.]+',
-            'youtube': r'https?://(?:www\.)?youtube\.com/(?:channel|c|user)/[\w-]+',
-            'github': r'https?://(?:www\.)?github\.com/[\w-]+',
-            'tiktok': r'https?://(?:www\.)?tiktok\.com/@[\w.]+',
-        }
-        
-        social_media = {}
-        for platform, pattern in social_patterns.items():
-            matches = re.findall(pattern, html_text)
-            if matches:
-                social_media[platform] = list(set(matches))[:2]
-        
-        return {
-            'emails': list(set(emails))[:3],
-            'phones': list(set(phones))[:3],
-            'social_media': social_media
-        }
-    
-    def _extract_contact_info_with_llm(self, html_text: str, footer_content: str = "") -> dict:
-        """Extract contact information using LLM when regex fails, including footer content"""
-        try:
-            # Truncate HTML text to reasonable length for LLM
-            truncated_text = html_text[:12000]  # Limit to 20000 characters
-            
-            # Prepare context with footer content prioritized
-            context_parts = [truncated_text]
-            if footer_content:
-                context_parts.insert(0, f"FOOTER CONTENT (HIGH PRIORITY FOR CONTACT INFO):\n{footer_content[:4000]}")
-                context_parts.insert(1, "\nMAIN CONTENT:")
-            
-            full_context = "\n\n".join(context_parts)
-            
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are an expert at extracting contact information from website content. 
-Extract emails, phone numbers, and social media links from the provided HTML content.
-Pay special attention to footer content as it often contains contact information.
-
-Return the information in a structured JSON format with these keys:
-- emails: array of email addresses found
-- phones: array of phone numbers found  
-- social_media: object with keys like 'twitter', 'linkedin', 'facebook', 'instagram' containing arrays of URLs
-
-Only extract information that appears to be legitimate contact information. Be precise and don't make assumptions.
-Prioritize footer content over main content for contact information."""),
-                ("human", f"Extract contact information from this website content:\n\n{full_context}")
-            ])
-            
-            chain = prompt | self.llm
-            
-            response = chain.invoke({})
-            content = response.content.strip()
-            
-            # Try to parse JSON response
-            try:
-                import json
-                parsed = json.loads(content)
-                return {
-                    'emails': parsed.get('emails', [])[:3],
-                    'phones': parsed.get('phones', [])[:3],
-                    'social_media': parsed.get('social_media', {})
+            # Convert metadata object to dictionary
+            metadata = {}
+            if metadata_obj:
+                # DocumentMetadata object has attributes like title, description, etc.
+                metadata = {
+                    "title": getattr(metadata_obj, "title", ""),
+                    "description": getattr(metadata_obj, "description", ""),
+                    "url": getattr(metadata_obj, "url", ""),
+                    "language": getattr(metadata_obj, "language", ""),
+                    "keywords": getattr(metadata_obj, "keywords", ""),
+                    "og_title": getattr(metadata_obj, "og_title", ""),
+                    "og_description": getattr(metadata_obj, "og_description", ""),
+                    "og_url": getattr(metadata_obj, "og_url", ""),
+                    "og_image": getattr(metadata_obj, "og_image", ""),
+                    "status_code": getattr(metadata_obj, "status_code", ""),
+                    "content_type": getattr(metadata_obj, "content_type", ""),
                 }
-            except json.JSONDecodeError:
-                # If JSON parsing fails, try to extract manually from text
-                return self._parse_llm_response_text(content)
-                
+            
+            # Process and structure the data
+            headings = self._extract_headings_from_markdown(markdown_content)
+            chunks = self._create_smart_chunks(markdown_content)
+            all_links = self._categorize_links(links, url)
+            
+            structured_data = {
+                "url": url,
+                "title": metadata.get("title", ""),
+                "description": metadata.get("description", ""),
+                "keywords": metadata.get("keywords", ""),
+                "og_title": metadata.get("og_title", ""),
+                "og_description": metadata.get("og_description", ""),
+                "markdown_content": markdown_content,
+                "html_content": html_content,
+                "main_content": self._extract_main_content(markdown_content),
+                "headings": headings,
+                "structured_chunks": chunks,
+                "chunks": chunks,
+                "total_chunks": len(chunks),
+                "all_links": all_links,
+                "internal_pages": all_links.get("internal", []),
+                "external_links": all_links.get("external", []),
+                "contact_info": self._extract_contact_info(markdown_content, html_content, links, chunks),
+                "metadata": metadata,
+                "language": metadata.get("language", "en"),
+                "scraper_used": "firecrawl"
+            }
+            
+            print(f"[SCRAPER] Processed {len(structured_data['chunks'])} content chunks")
+            
+            # Save to cache
+            self._save_to_cache(url, structured_data)
+            
+            return structured_data
+            
         except Exception as e:
-            print(f"[API] LLM contact extraction failed: {str(e)}")
-            return {'emails': [], 'phones': [], 'social_media': {}}
+            print(f"[SCRAPER] Error during Firecrawl scrape: {str(e)}")
+            # Try fallback scraper
+            return self._scrape_with_beautifulsoup(url)
     
-    def _parse_llm_response_text(self, response_text: str) -> dict:
-        """Parse LLM response when JSON parsing fails"""
-        emails = []
-        phones = []
-        social_media = {}
+    def _scrape_with_beautifulsoup(self, url: str) -> Dict:
+        """Fallback scraper using BeautifulSoup"""
+        try:
+            print(f"[SCRAPER] Using BeautifulSoup fallback for: {url}")
+            
+            response = requests.get(url, headers=self.headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'lxml')
+            
+            # Extract title
+            title = soup.title.string if soup.title else ""
+            
+            # Convert HTML to markdown
+            markdown_content = self.html_converter.handle(str(soup))
+            
+            # Extract metadata
+            metadata = {
+                "title": title,
+                "description": soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'}),
+                "keywords": soup.find('meta', attrs={'name': 'keywords'}),
+                "og_title": soup.find('meta', attrs={'property': 'og:title'}),
+                "og_description": soup.find('meta', attrs={'property': 'og:description'}),
+                "status_code": response.status_code,
+                "content_type": response.headers.get('content-type', ''),
+            }
+            
+            # Clean metadata
+            for key, value in metadata.items():
+                if hasattr(value, 'get'):
+                    metadata[key] = value.get('content', '') if value else ''
+                elif hasattr(value, 'string'):
+                    metadata[key] = value.string or ''
+                else:
+                    metadata[key] = str(value) if value else ''
+            
+            # Extract links
+            links = []
+            for a_tag in soup.find_all('a', href=True):
+                links.append(a_tag['href'])
+            
+            # Process and structure the data
+            headings = self._extract_headings_from_markdown(markdown_content)
+            chunks = self._create_smart_chunks(markdown_content)
+            all_links = self._categorize_links(links, url)
+            
+            structured_data = {
+                "url": url,
+                "title": metadata.get("title", ""),
+                "description": metadata.get("description", ""),
+                "keywords": metadata.get("keywords", ""),
+                "og_title": metadata.get("og_title", ""),
+                "og_description": metadata.get("og_description", ""),
+                "markdown_content": markdown_content,
+                "html_content": str(soup),
+                "main_content": self._extract_main_content(markdown_content),
+                "headings": headings,
+                "structured_chunks": chunks,
+                "chunks": chunks,
+                "total_chunks": len(chunks),
+                "all_links": all_links,
+                "internal_pages": all_links.get("internal", []),
+                "external_links": all_links.get("external", []),
+                "contact_info": self._extract_contact_info(markdown_content, str(soup), links, chunks),
+                "metadata": metadata,
+                "language": metadata.get("language", "en"),
+                "scraper_used": "beautifulsoup"
+            }
+            
+            print(f"[SCRAPER] BeautifulSoup fallback processed {len(structured_data['chunks'])} content chunks")
+            
+            # Save to cache
+            self._save_to_cache(url, structured_data)
+            
+            return structured_data
+            
+        except Exception as e:
+            print(f"[SCRAPER] BeautifulSoup fallback also failed: {str(e)}")
+            raise
+            
+        except Exception as e:
+            print(f"[SCRAPER] Error during Firecrawl scrape: {str(e)}")
+            raise Exception(f"Failed to scrape website with Firecrawl: {str(e)}")
+    
+    def _extract_headings_from_markdown(self, markdown: str) -> List[Dict]:
+        """Extract headings from markdown content"""
+        headings = []
+        lines = markdown.split("\n")
         
-        # Simple text parsing as fallback
-        lines = response_text.lower().split('\n')
         for line in lines:
             line = line.strip()
-            if '@' in line and '.' in line:
-                # Look for email patterns
-                email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', line)
-                if email_match and email_match.group() not in emails:
-                    emails.append(email_match.group())
-            
-            # Look for phone patterns
-            phone_match = re.search(r'\b(?:\+?1[-.]?)?\d{3}[-.]?\d{3}[-.]?\d{4}\b', line)
-            if phone_match and phone_match.group() not in phones:
-                phones.append(phone_match.group())
-            
-            # Look for social media
-            if 'twitter' in line or 'x.com' in line:
-                url_match = re.search(r'https?://(?:www\.)?(?:twitter|x)\.com/[\w]+', line)
-                if url_match:
-                    social_media['twitter'] = social_media.get('twitter', []) + [url_match.group()]
-            
-            if 'linkedin' in line:
-                url_match = re.search(r'https?://(?:www\.)?linkedin\.com/(?:company|in)/[\w-]+', line)
-                if url_match:
-                    social_media['linkedin'] = social_media.get('linkedin', []) + [url_match.group()]
-            
-            if 'facebook' in line:
-                url_match = re.search(r'https?://(?:www\.)?facebook\.com/[\w.]+', line)
-                if url_match:
-                    social_media['facebook'] = social_media.get('facebook', []) + [url_match.group()]
-            
-            if 'instagram' in line:
-                url_match = re.search(r'https?://(?:www\.)?instagram\.com/[\w.]+', line)
-                if url_match:
-                    social_media['instagram'] = social_media.get('instagram', []) + [url_match.group()]
+            if line.startswith("#"):
+                level = 0
+                for char in line:
+
+
+
+                    if char == "#":
+                        level += 1
+                    else:
+                        break
+                
+                text = line.lstrip("#").strip()
+                if text:
+                    headings.append({"level": level, "text": text, "type": f"h{level}"})
         
-        # Remove duplicates
-        for platform in social_media:
-            social_media[platform] = list(set(social_media[platform]))[:2]
+        return headings
+    
+    def _extract_headings_from_soup(self, soup) -> List[Dict]:
+        """Extract headings from BeautifulSoup object"""
+        headings = []
+        for i in range(1, 7):  # h1 to h6
+            for heading in soup.find_all(f'h{i}'):
+                text = heading.get_text().strip()
+                if text:
+                    headings.append({
+                        'level': i,
+                        'text': text,
+                        'type': f'h{i}'
+                    })
+        return headings
+    
+    def _extract_main_content(self, markdown: str) -> str:
+        """Extract and clean main content from markdown"""
+        content = re.sub(r"\n{3,}", "\n\n", markdown)
+        content = re.sub(r"(?i)^#+\s*(navigation|menu|footer|copyright).*$", "", content, flags=re.MULTILINE)
+        return content.strip()
+    
+    def _create_smart_chunks(self, markdown: str) -> List[str]:
+        """Create intelligent chunks from markdown content"""
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        max_chunk_size = 1500
         
-        return {
-            'emails': emails[:3],
-            'phones': phones[:3],
-            'social_media': social_media
+        lines = markdown.split("\n")
+        
+        for line in lines:
+            line_length = len(line)
+            
+            if line.strip().startswith("# ") and current_chunk and current_length > 300:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+            
+            current_chunk.append(line)
+            current_length += line_length
+            
+            if current_length >= max_chunk_size:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+        
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
+        
+        chunks = [chunk.strip() for chunk in chunks if len(chunk.strip()) > 100]
+        return chunks
+    
+    def _categorize_links(self, links: List[str], base_url: str) -> Dict[str, List[Dict]]:
+        """Categorize links into different types"""
+        categorized = {
+            "internal": [],
+            "external": [],
+            "social_media": [],
+            "contact_pages": [],
+            "resource_pages": []
         }
-    
-    def _extract_all_links(self, html_text: str, base_url: str) -> Dict:
-        """Extract all links from the page and categorize them"""
-        try:
-            soup = BeautifulSoup(html_text, 'html.parser')
-            links = {
-                'social_media': [],
-                'contact_pages': [],
-                'internal_pages': [],
-                'external_links': [],
-                'email_links': []
-            }
-            
-            # Social media patterns
-            social_domains = ['twitter.com', 'x.com', 'facebook.com', 'linkedin.com', 
-                            'instagram.com', 'youtube.com', 'github.com', 'tiktok.com',
-                            'pinterest.com', 'medium.com']
-            
-            # Contact page patterns
-            contact_keywords = ['contact', 'about', 'team', 'support', 'help', 'reach-us']
-            
-            for link in soup.find_all('a', href=True):
-                href = link.get('href', '').strip()
-                text = link.get_text().strip()
-                
-                if not href:
-                    continue
-                
-                # Handle mailto links
-                if href.startswith('mailto:'):
-                    email = href.replace('mailto:', '').split('?')[0]
-                    if email:
-                        links['email_links'].append({'email': email, 'text': text})
-                    continue
-                
-                # Handle tel links
-                if href.startswith('tel:'):
-                    continue
-                
-                # Make relative URLs absolute
-                if href.startswith('/'):
-                    href = f"{base_url.rstrip('/')}{href}"
-                elif not href.startswith('http'):
-                    continue
-                
-                # Categorize the link
-                is_social = any(domain in href.lower() for domain in social_domains)
-                is_contact = any(keyword in href.lower() for keyword in contact_keywords)
-                is_internal = base_url.split('/')[2] in href
-                
-                link_data = {'url': href, 'text': text}
-                
-                if is_social:
-                    links['social_media'].append(link_data)
-                elif is_contact:
-                    links['contact_pages'].append(link_data)
-                elif is_internal:
-                    links['internal_pages'].append(link_data)
-                else:
-                    links['external_links'].append(link_data)
-            
-            # Remove duplicates and limit results
-            for category in links:
-                seen = set()
-                unique_links = []
-                for link in links[category]:
-                    url_key = link.get('url') or link.get('email')
-                    if url_key and url_key not in seen:
-                        seen.add(url_key)
-                        unique_links.append(link)
-                links[category] = unique_links[:10]  # Limit to 10 per category
-            
-            return links
-            
-        except Exception as e:
-            print(f"[API] Error extracting links: {str(e)}")
-            return {
-                'social_media': [],
-                'contact_pages': [],
-                'internal_pages': [],
-                'external_links': [],
-                'email_links': []
-            }
-    
-    def _validate_phones_with_llm(self, phone_candidates: List[str], context: str = "") -> List[str]:
-        """Use LLM to validate which phone numbers are actually valid contact numbers"""
-        if not phone_candidates:
-            return []
         
+        base_domain = urlparse(base_url).netloc
+        social_domains = ["facebook.com", "twitter.com", "linkedin.com", "instagram.com", "youtube.com", "tiktok.com", "pinterest.com", "github.com", "x.com", "medium.com"]
+        contact_keywords = ["contact", "about", "team", "careers", "jobs", "company"]
+        resource_keywords = ["blog", "resources", "docs", "documentation", "pricing", "plans"]
+        
+        for link in links:
+            try:
+                if not link or not isinstance(link, str):
+                    continue
+                
+                full_url = urljoin(base_url, link)
+                parsed = urlparse(full_url)
+                
+                link_info = {"url": full_url, "text": parsed.path.split("/")[-1] or parsed.netloc, "domain": parsed.netloc}
+                
+                if any(social in parsed.netloc for social in social_domains):
+                    categorized["social_media"].append(link_info)
+                elif parsed.netloc == base_domain or not parsed.netloc:
+                    categorized["internal"].append(link_info)
+                    path_lower = parsed.path.lower()
+                    if any(keyword in path_lower for keyword in contact_keywords):
+                        categorized["contact_pages"].append(link_info)
+                    if any(keyword in path_lower for keyword in resource_keywords):
+                        categorized["resource_pages"].append(link_info)
+                else:
+                    categorized["external"].append(link_info)
+            except Exception as e:
+                print(f"[SCRAPER] Error processing link {link}: {str(e)}")
+                continue
+        
+        return categorized
+    
+    def _extract_contact_info(self, markdown: str, html: str, links: List[str], chunks: Optional[List[str]] = None) -> Dict:
+        """Extract contact information"""
+        contact_info = {"emails": [], "phones": [], "addresses": [], "social_media": {}}
+        links = links or []
+        
+        text_sources = [markdown or ""]
+        if chunks:
+            text_sources.extend(chunks[:20])
+
+        if not any(text_sources) and html:
+            try:
+                text_sources.append(self.html_converter.handle(html))
+            except Exception:
+                text_sources.append(html)
+
+        combined_text = "\n".join([source for source in text_sources if source])
+
+        email_pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"
+        emails = set(re.findall(email_pattern, combined_text))
+
+        for link in links:
+            href = ""
+            if isinstance(link, dict):
+                href = str(link.get("url") or link.get("href") or "")
+            else:
+                href = str(link)
+            if href.startswith("mailto:"):
+                emails.add(href.split(":", 1)[1])
+
+        filtered_emails = [email for email in emails if not any(skip in email.lower() for skip in ["example.com", "test.com", "domain.com", "yourcompany.com"])]
+        contact_info["emails"] = sorted(filtered_emails)[:8]
+
+        phone_pattern = r"(?:(?:\+\d{1,3}[\s-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s-]?)?(?:\d{3,4}[\s-]?){2,3}\d{3,4}"
+        raw_phone_matches = re.findall(phone_pattern, combined_text)
+
+        cleaned_phones = set()
+        for match in raw_phone_matches:
+            digits = re.sub(r"\D", "", match)
+            if 9 <= len(digits) <= 15:
+                normalized = self._format_phone_number(match)
+                if normalized:
+                    cleaned_phones.add(normalized)
+
+        contact_info["phones"] = sorted(cleaned_phones)[:8]
+
+        contact_info["addresses"] = self._extract_addresses_from_markdown(combined_text)
+
+        social_platforms = {
+            "facebook": "facebook.com",
+            "twitter": "twitter.com",
+            "x": "x.com",
+            "linkedin": "linkedin.com",
+            "instagram": "instagram.com",
+            "youtube": "youtube.com",
+            "github": "github.com",
+            "tiktok": "tiktok.com"
+        }
+
+        for platform, domain in social_platforms.items():
+            platform_links = []
+            for link in links:
+                link_url = ""
+                if isinstance(link, dict):
+                    link_url = str(link.get("url") or link.get("href") or "")
+                    display = link.get("url") or link.get("text") or link_url
+                else:
+                    link_url = str(link)
+                    display = link_url
+                if domain in link_url.lower():
+                    platform_links.append(display)
+            if platform_links:
+                contact_info["social_media"][platform] = platform_links[:8]
+
+        validation_context = combined_text[:6000]
+        contact_info["emails"] = self._validate_contact_field("email addresses", contact_info["emails"], validation_context)
+        contact_info["phones"] = self._validate_contact_field("phone numbers", contact_info["phones"], validation_context)
+        contact_info["addresses"] = self._validate_contact_field("physical addresses", contact_info["addresses"], validation_context)
+
+        flat_social = []
+        for platform, entries in contact_info["social_media"].items():
+            for entry in entries:
+                flat_social.append(f"{platform}:{entry}")
+
+        validated_social = self._validate_contact_field("social media links", flat_social, validation_context)
+        rebuilt_social = {}
+        for item in validated_social:
+            if ":" in item:
+                platform, link_value = item.split(":", 1)
+                platform = platform.strip()
+                rebuilt_social.setdefault(platform, [])
+                link = link_value.strip()
+                if link and link not in rebuilt_social[platform]:
+                    rebuilt_social[platform].append(link)
+
+        if rebuilt_social:
+            for platform in rebuilt_social:
+                rebuilt_social[platform] = rebuilt_social[platform][:5]
+            contact_info["social_media"] = rebuilt_social
+
+        return contact_info
+
+    def _format_phone_number(self, phone: str) -> Optional[str]:
+        digits = re.sub(r"\D", "", phone)
+        if not digits:
+            return None
+        if len(digits) == 10:
+            return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+        if len(digits) == 11 and digits.startswith("1"):
+            return f"+1 {digits[1:4]}-{digits[4:7]}-{digits[7:]}"
+        if len(digits) >= 11:
+            return f"+{digits[:len(digits)-10]} {digits[-10:-7]}-{digits[-7:-4]}-{digits[-4:]}"
+        return phone.strip()
+
+    def _extract_addresses_from_markdown(self, text: str) -> List[str]:
+        lines = [line.strip() for line in text.splitlines()]
+        addresses = []
+        for idx, line in enumerate(lines):
+            if not line:
+                continue
+            if re.search(r"\b(address|location|headquarters|office|hq)\b", line, re.IGNORECASE):
+                collected = []
+                base_line = re.sub(r"(?i)^(address|location|headquarters|office|hq)[:\-]*", "", line).strip()
+                if base_line:
+                    collected.append(base_line)
+                j = idx + 1
+                while j < len(lines) and lines[j] and len(collected) < 4:
+                    collected.append(lines[j])
+                    j += 1
+                candidate = " ".join(collected).strip()
+                if candidate and self._looks_like_address(candidate):
+                    addresses.append(candidate)
+
+        unique_addresses = []
+        seen = set()
+        for address in addresses:
+            key = address.lower()
+            if key not in seen:
+                seen.add(key)
+                unique_addresses.append(address)
+
+        return unique_addresses[:3]
+
+    def _looks_like_address(self, candidate: str) -> bool:
+        if len(candidate) < 10:
+            return False
+        if re.search(r"\d{1,5}\s+\w+", candidate) and re.search(r"(street|st\.?|avenue|ave\.?|road|rd\.?|boulevard|blvd\.?|suite|floor|drive|dr\.?|lane|ln\.?|city|state|zip|postal|country)", candidate, re.IGNORECASE):
+            return True
+        if re.search(r"\b[A-Z][a-z]+,\s*[A-Z]{2}\b", candidate):
+            return True
+        if re.search(r"\b\d{5}(-\d{4})?\b", candidate):
+            return True
+        return False
+
+    def _validate_contact_field(self, field_name: str, candidates: List[str], context: str) -> List[str]:
+        if not candidates:
+            return []
         try:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are a phone number validator. Your job is to identify which numbers from a list are valid business contact phone numbers.
+            prompt = ChatPromptTemplate.from_template(
+                """You are validating contact details extracted from a website.
+Context:
+{context}
 
-Invalid numbers include:
-- Unix timestamps
-- Random number sequences
-- Order numbers or IDs
-- Dates in numeric format
-- Price numbers
-- Product codes
+Candidates ({field_name}):
+{candidates}
 
-Valid numbers typically:
-- Have proper phone formatting (parentheses, dashes, spaces, + signs)
-- Are 10-11 digits (with country code)
-- Follow standard patterns for business phones
+Return ONLY a JSON array of the candidates that are explicitly supported by the context text. Use the exact text for each confirmed entry. If none are valid, return []."""
+            )
 
-Return ONLY a JSON array of valid phone numbers from the input list."""),
-                ("human", """Phone number candidates: {phones}
-
-Context (if available): {context}
-
-Return valid phone numbers as a JSON array. Example: ["123-456-7890", "+1-555-123-4567"]""")
-            ])
-            
-            chain = prompt | self.llm
-            response = chain.invoke({
-                "phones": ", ".join(phone_candidates[:10]),  # Limit to first 10
-                "context": context[:500]  # Brief context
-            })
-            
-            # Parse the response
+            messages = prompt.format_messages(context=context, field_name=field_name, candidates=json.dumps(candidates))
+            response = self.llm.invoke(messages)
             content = response.content.strip()
-            
-            # Try to extract JSON from the response
-            json_match = re.search(r'\[.*\]', content, re.DOTALL)
-            if json_match:
-                validated = json.loads(json_match.group())
-                return validated[:3]  # Return top 3
-            
-            return phone_candidates[:3]  # Fallback to original
-            
+
+            json_start = content.find('[')
+            json_end = content.rfind(']') + 1
+            if json_start != -1 and json_end > json_start:
+                try:
+                    parsed = json.loads(content[json_start:json_end])
+                    if isinstance(parsed, list):
+                        cleaned = []
+                        seen = set()
+                        for item in parsed:
+                            if not isinstance(item, str):
+                                continue
+                            value = item.strip()
+                            if value and value in candidates and value not in seen:
+                                seen.add(value)
+                                cleaned.append(value)
+                        return cleaned
+                except json.JSONDecodeError:
+                    pass
         except Exception as e:
-            print(f"[API] Phone validation with LLM failed: {str(e)}")
-            return phone_candidates[:3]  # Fallback to original
+            print(f"[SCRAPER] Contact validation error for {field_name}: {e}")
+        return candidates[:5]

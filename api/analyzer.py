@@ -1,12 +1,13 @@
 from typing import Dict, List, Optional
 import os
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-from langchain.output_parsers import PydanticOutputParser
-from langchain.chains import LLMChain
 from pydantic import BaseModel, Field
 import json
 import re
+
+from api.groq_services import GroqCompoundClient
+
 
 # Define structured output models
 class BusinessInsights(BaseModel):
@@ -18,17 +19,21 @@ class BusinessInsights(BaseModel):
     target_audience: str = Field(description="Primary customer demographic or market segment")
     sentiment: str = Field(description="Overall tone and sentiment of the website")
 
+
 class AIAnalyzer:
-    def __init__(self):
-        self.llm = ChatOpenAI(
-            model="openai/gpt-oss-20b",
+    """Business website analyzer using Firecrawl-scraped data"""
+    
+    def __init__(self, groq_client: Optional[GroqCompoundClient] = None):
+        self.llm = ChatGroq(
+            model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b"),
             temperature=0.3,
-            api_key=os.environ.get("GROQ_API_KEY", ""),
-            base_url="https://api.groq.com/openai/v1"
+            groq_api_key=os.environ.get("GROQ_API_KEY", "")
         )
-        
-        # Setup output parser
-        self.parser = PydanticOutputParser(pydantic_object=BusinessInsights)
+        self.groq_client = groq_client or GroqCompoundClient()
+        try:
+            self.browser_question_limit = int(os.environ.get("GROQ_BROWSER_QUESTION_LIMIT", "3"))
+        except ValueError:
+            self.browser_question_limit = 3
     
     def analyze_website(self, scraped_data: Dict, custom_questions: Optional[List[str]] = None) -> Dict:
         """Analyze website content using LangChain"""
@@ -58,46 +63,51 @@ class AIAnalyzer:
         contact_sources = self._identify_contact_sources(contact_info, chunks)
         all_source_chunks.update(contact_sources)
         
-        return {
+        live_visit = self._run_live_visit(scraped_data)
+        live_browser_answers = self._run_live_browser_research(scraped_data.get('url'), custom_questions or [])
+
+        result = {
             **default_insights,
             'custom_answers': custom_insights,
             'source_chunks': all_source_chunks,
             'contact_info': contact_info
         }
+        if live_visit:
+            result['groq_live_visit'] = live_visit
+        if live_browser_answers:
+            result['groq_browser_research'] = live_browser_answers
+
+        return result
     
     def _prepare_context(self, scraped_data: Dict) -> str:
-        """Prepare context from scraped data using reranked chunks"""
+        """Prepare context from Firecrawl-scraped data using markdown content"""
         context_parts = [
             f"Website URL: {scraped_data.get('url', 'N/A')}",
             f"Title: {scraped_data.get('title', 'N/A')}",
+            f"Description: {scraped_data.get('description', 'N/A')}",
         ]
 
-        # Add headings
+        # Add headings for structure
         headings = scraped_data.get('headings', [])
         if headings:
-            context_parts.append(f"\nHeadings:")
-            for heading in headings[:10]:  # Limit to top 10 headings
-                context_parts.append(f"- {heading.get('text', '')}")
+            context_parts.append(f"\nPage Structure (Headings):")
+            for heading in headings[:12]:  # Top 12 headings
+                context_parts.append(f"{'#' * heading.get('level', 1)} {heading.get('text', '')}")
 
-        # Use reranked chunks for main content (more relevant)
-        reranked_chunks = scraped_data.get('structured_chunks', [])
-        if reranked_chunks:
-            context_parts.append(f"\nMain Content (from top reranked chunks):")
-            # Use top 8 reranked chunks for context
-            for i, chunk in enumerate(reranked_chunks[:8]):
+        # Use content chunks from Firecrawl (already intelligently chunked)
+        chunks = scraped_data.get('structured_chunks', [])
+        if chunks:
+            context_parts.append(f"\nMain Content (from {len(chunks)} chunks):")
+            # Use top chunks for context
+            for i, chunk in enumerate(chunks[:10]):  # Top 10 chunks
                 context_parts.append(f"\n--- Chunk {i+1} ---")
                 context_parts.append(chunk[:1500])  # Limit chunk size
-
-        # Include footer content if available (from full HTML)
-        full_html = scraped_data.get('full_html', '')
-        if full_html and len(full_html) < 10000:  # Only if not too large
-            # Extract footer content using simple regex
-            import re
-            footer_match = re.search(r'<footer[^>]*>(.*?)</footer>', full_html, re.DOTALL | re.IGNORECASE)
-            if footer_match:
-                footer_text = re.sub(r'<[^>]+>', '', footer_match.group(1)).strip()
-                if footer_text:
-                    context_parts.append(f"\nFooter Content:\n{footer_text}")
+        
+        # Add markdown content summary if available
+        markdown_content = scraped_data.get('markdown_content', '')
+        if markdown_content and len(markdown_content) < 8000:
+            context_parts.append(f"\nMarkdown Content Summary:")
+            context_parts.append(markdown_content[:8000])
 
         return "\n".join(context_parts)
     
@@ -435,3 +445,32 @@ Answer:""")
         # Sort by score and return top chunks
         chunk_scores.sort(key=lambda x: x[1], reverse=True)
         return [chunk for chunk, score in chunk_scores if score > 0][:5]  # Return top 5 relevant chunks
+
+    # ------------------------------------------------------------------
+    # Groq Compound integrations
+    # ------------------------------------------------------------------
+    def _run_live_visit(self, scraped_data: Dict) -> Optional[Dict]:
+        url = scraped_data.get('url')
+        if not self.groq_client or not url:
+            return None
+        visit_result = self.groq_client.visit_website(url, instructions="Provide any breaking updates, positioning changes, or noteworthy calls-to-action that may not appear in cached data.")
+        if visit_result and visit_result.get('content'):
+            return visit_result
+        return None
+
+    def _run_live_browser_research(self, url: Optional[str], questions: List[str]) -> Dict[str, Dict]:
+        if not self.groq_client or not questions:
+            return {}
+
+        results: Dict[str, Dict] = {}
+        limit = max(0, self.browser_question_limit)
+        if limit == 0:
+            return {}
+
+        for question in questions[:limit]:
+            if not question.strip():
+                continue
+            research = self.groq_client.browser_research(question, focus_url=url)
+            if research and research.get('content'):
+                results[question] = research
+        return results

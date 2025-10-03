@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Send, Bot, User } from "lucide-react"
 import { chatAboutWebsiteAction } from "@/app/actions"
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import DOMPurify from 'dompurify'
 
 interface Message {
@@ -28,6 +29,7 @@ function MarkdownMessage({ content, isUser }: { content: string; isUser: boolean
   return (
     <div className={`prose prose-sm max-w-none ${isUser ? 'prose-invert' : ''}`}>
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         components={{
           // Customize link styling
           a: ({ children, href, ...props }) => (
