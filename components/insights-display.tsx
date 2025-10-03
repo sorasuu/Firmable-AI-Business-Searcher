@@ -158,13 +158,17 @@ const SummarySection = ({ insights, expandedPanels, togglePanel, renderSources }
   return (
     <Card className="p-6 border-l-4 border-l-blue-600 hover:shadow-lg transition-shadow bg-gradient-to-r from-blue-50 to-transparent">
       <div className="flex items-start justify-between">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-3 flex-1">
           <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 shadow-md">
             <Sparkles className="w-4 h-4 text-white" />
           </div>
-          <div>
+          <div className="flex-1">
             <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">AI Summary</h3>
-            <p className="text-gray-900 leading-relaxed mt-2">{insights.summary}</p>
+            <div className="text-gray-900 leading-relaxed mt-2 prose prose-sm max-w-none">
+              <ReactMarkdown components={markdownComponents}>
+                {DOMPurify.sanitize(insights.summary)}
+              </ReactMarkdown>
+            </div>
           </div>
         </div>
         {hasSources && (
@@ -224,14 +228,22 @@ const BusinessIntelSection = ({ insights, expandedPanels, togglePanel, renderSou
           {intel.conversation_summary && (
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Conversation Summary</p>
-              <p className="text-sm text-gray-800 leading-relaxed mt-1">{intel.conversation_summary}</p>
+              <div className="text-sm text-gray-800 leading-relaxed mt-1 prose prose-sm max-w-none">
+                <ReactMarkdown components={markdownComponents}>
+                  {DOMPurify.sanitize(intel.conversation_summary)}
+                </ReactMarkdown>
+              </div>
             </div>
           )}
 
           {intel.executive_summary && (
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Executive Summary</p>
-              <p className="text-sm text-gray-900 leading-relaxed mt-1">{intel.executive_summary}</p>
+              <div className="text-sm text-gray-900 leading-relaxed mt-1 prose prose-sm max-w-none">
+                <ReactMarkdown components={markdownComponents}>
+                  {DOMPurify.sanitize(intel.executive_summary)}
+                </ReactMarkdown>
+              </div>
             </div>
           )}
 
@@ -241,9 +253,16 @@ const BusinessIntelSection = ({ insights, expandedPanels, togglePanel, renderSou
               .map(({ title, items, border, accent }) => (
                 <div key={title} className={`bg-white/70 rounded-lg border ${border} p-4`}>
                   <p className={`text-xs font-semibold ${accent} uppercase tracking-wide mb-2`}>{title}</p>
-                  <ul className="space-y-1 text-sm text-gray-800 list-disc list-inside">
+                  <ul className="space-y-2 text-sm text-gray-800">
                     {items!.map((item, index) => (
-                      <li key={`${title}-${index}`}>{item}</li>
+                      <li key={`${title}-${index}`} className="flex items-start gap-2">
+                        <span className="text-gray-400 mt-1">•</span>
+                        <div className="flex-1 prose prose-sm max-w-none">
+                          <ReactMarkdown components={markdownComponents}>
+                            {DOMPurify.sanitize(item)}
+                          </ReactMarkdown>
+                        </div>
+                      </li>
                     ))}
                   </ul>
                 </div>
@@ -320,9 +339,13 @@ const ExecutiveFallbackSection = ({ insights }: { insights: InsightsData }) => {
         <div className="p-2 rounded-lg bg-gradient-to-br from-purple-500 to-blue-500 shadow-md">
           <Sparkles className="w-4 h-4 text-white" />
         </div>
-        <div>
+        <div className="flex-1">
           <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Executive Summary</h3>
-          <p className="text-gray-900 leading-relaxed mt-2">{insights.business_intel.executive_summary}</p>
+          <div className="text-gray-900 leading-relaxed mt-2 prose prose-sm max-w-none">
+            <ReactMarkdown components={markdownComponents}>
+              {DOMPurify.sanitize(insights.business_intel.executive_summary)}
+            </ReactMarkdown>
+          </div>
         </div>
       </div>
     </Card>
@@ -496,7 +519,11 @@ const USPSection = ({ insights, expandedPanels, togglePanel, renderSources }: Pa
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">Unique Selling Proposition</h3>
-          <p className="text-gray-900 leading-relaxed">{insights.usp}</p>
+          <div className="text-gray-900 leading-relaxed prose prose-sm max-w-none">
+            <ReactMarkdown components={markdownComponents}>
+              {DOMPurify.sanitize(insights.usp)}
+            </ReactMarkdown>
+          </div>
         </div>
         {hasSources && (
           <ToggleButton
@@ -527,7 +554,11 @@ const ProductsServicesSection = ({ insights, expandedPanels, togglePanel, render
             </div>
             <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Products & Services</h3>
           </div>
-          <p className="text-gray-900 leading-relaxed">{insights.products_services}</p>
+          <div className="text-gray-900 leading-relaxed prose prose-sm max-w-none">
+            <ReactMarkdown components={markdownComponents}>
+              {DOMPurify.sanitize(insights.products_services)}
+            </ReactMarkdown>
+          </div>
         </div>
         {hasSources && (
           <ToggleButton
