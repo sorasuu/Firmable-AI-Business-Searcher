@@ -1,4 +1,5 @@
 ﻿from typing import Dict, Optional, List, Tuple, Any
+import ast
 import os
 import re
 import json
@@ -112,9 +113,10 @@ class WebsiteScraper:
                             print(f"[CACHE] Missing url or data in cache entry on line {line_number}")
                             continue
 
-                        cache[url_value] = data_value
+                        payload = self._prepare_cache_payload(url_value, data_value)
+                        cache[url_value] = payload
 
-                        sanitized_entry = {'url': url_value, 'data': data_value}
+                        sanitized_entry = {'url': url_value, 'data': payload}
                         if 'timestamp' in entry:
                             sanitized_entry['timestamp'] = entry['timestamp']
                         sanitized_entries[url_value] = sanitized_entry
@@ -130,20 +132,68 @@ class WebsiteScraper:
         return cache
     
     def _save_to_cache(self, url: str, data: Dict):
-        """Save scraped data to cache"""
+        """Save scraped raw data to cache"""
         try:
+            payload = self._prepare_cache_payload(url, data)
             entry = {
                 'url': url,
-                'data': data,
+                'data': payload,
                 'timestamp': json.dumps({'timestamp': None})  # Could add actual timestamp
             }
             with open(self.cache_file, 'a', encoding='utf-8') as f:
                 json.dump(entry, f, ensure_ascii=False)
                 f.write('\n')
-            self.cache[url] = data
+            self.cache[url] = payload
             print(f"[CACHE] Saved {url} to cache")
         except Exception as e:
             print(f"[CACHE] Error saving to cache: {e}")
+
+    def _prepare_cache_payload(self, url: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a minimal cache payload from raw or structured data."""
+        payload: Dict[str, Any] = {
+            'url': url or data.get('url', '')
+        }
+
+        markdown = data.get('markdown_content') or data.get('markdown') or ''
+        payload['markdown_content'] = markdown
+
+        html_content = data.get('html_content') or data.get('html') or ''
+        payload['html_content'] = html_content
+
+        metadata = data.get('metadata')
+        if isinstance(metadata, dict) and metadata:
+            payload['metadata'] = metadata
+
+        links = data.get('links')
+        if not links and isinstance(data.get('all_links'), dict):
+            aggregated: List[str] = []
+            for group in data['all_links'].values():
+                if not isinstance(group, list):
+                    continue
+                for entry in group:
+                    if isinstance(entry, dict):
+                        href = entry.get('url') or entry.get('href')
+                        if href:
+                            aggregated.append(str(href))
+            if aggregated:
+                links = aggregated
+        if links:
+            if isinstance(links, (list, tuple, set)):
+                sanitized_links = []
+                for item in links:
+                    if isinstance(item, (str, dict)):
+                        sanitized_links.append(item)
+                    else:
+                        sanitized_links.append(str(item))
+                payload['links'] = sanitized_links
+            else:
+                payload['links'] = [str(links)]
+
+        scraper_used = data.get('scraper_used') or data.get('scraper')
+        if scraper_used:
+            payload['scraper_used'] = scraper_used
+
+        return payload
 
     def _parse_cache_line(self, line: str) -> Tuple[List[Dict[str, Any]], bool]:
         """Parse one or more JSON objects from a cache line."""
@@ -181,9 +231,110 @@ class WebsiteScraper:
         except Exception as e:
             print(f"[CACHE] Failed to rewrite cache: {e}")
     
+    def _normalize_links_list(self, links_raw: Any, html_content: str) -> List[str]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+
+        if isinstance(links_raw, (list, tuple, set)):
+            for item in links_raw:
+                href: Optional[str] = None
+                if isinstance(item, str):
+                    href = item
+                elif isinstance(item, dict):
+                    href_value = item.get('url') or item.get('href')
+                    if href_value:
+                        href = str(href_value)
+                if href:
+                    href = href.strip()
+                    if href and href not in seen:
+                        seen.add(href)
+                        normalized.append(href)
+
+        if not normalized and html_content:
+            try:
+                soup = BeautifulSoup(html_content, 'lxml')
+                for anchor in soup.find_all('a', href=True):
+                    href = anchor['href'].strip()
+                    if href and href not in seen:
+                        seen.add(href)
+                        normalized.append(href)
+            except Exception as exc:
+                print(f"[SCRAPER] Link normalization failed: {exc}")
+
+        return normalized
+
+    def _build_structured_data(self, raw_payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not raw_payload:
+            return {}
+
+        url = raw_payload.get('url', '')
+        markdown = raw_payload.get('markdown_content') or ''
+        html_content = raw_payload.get('html_content') or ''
+
+        if not markdown and html_content:
+            try:
+                markdown = self.html_converter.handle(html_content)
+            except Exception as exc:
+                print(f"[SCRAPER] Failed to convert HTML to markdown from cache: {exc}")
+                markdown = ''
+
+        metadata = raw_payload.get('metadata') or {}
+        links_raw = raw_payload.get('links') or []
+        normalized_links = self._normalize_links_list(links_raw, html_content)
+        links_for_contact = links_raw if links_raw else normalized_links
+
+        headings = self._extract_headings_from_markdown(markdown)
+        chunks = self._create_smart_chunks(markdown)
+        main_content = self._extract_main_content(markdown)
+        all_links = self._categorize_links(normalized_links, url)
+        contact_info = self._extract_contact_info(
+            markdown,
+            html_content,
+            links_for_contact,
+            chunks,
+            url
+        )
+
+        structured_data = {
+            "url": url,
+            "title": metadata.get("title", ""),
+            "description": metadata.get("description", ""),
+            "keywords": metadata.get("keywords", ""),
+            "og_title": metadata.get("og_title", ""),
+            "og_description": metadata.get("og_description", ""),
+            "markdown_content": markdown,
+            "html_content": html_content,
+            "main_content": main_content,
+            "headings": headings,
+            "structured_chunks": chunks,
+            "chunks": chunks,
+            "total_chunks": len(chunks),
+            "all_links": all_links,
+            "internal_pages": all_links.get("internal", []),
+            "external_links": all_links.get("external", []),
+            "contact_info": contact_info,
+            "metadata": metadata,
+            "language": metadata.get("language", "en"),
+            "scraper_used": raw_payload.get('scraper_used', 'cache')
+        }
+
+        return structured_data
+
     def _get_from_cache(self, url: str) -> Optional[Dict]:
-        """Get data from cache if available"""
-        return self.cache.get(url)
+        """Get structured data from cache if available"""
+        raw_payload = self.cache.get(url)
+        if not raw_payload:
+            return None
+
+        if not isinstance(raw_payload, dict) or 'markdown_content' not in raw_payload:
+            raw_payload = self._prepare_cache_payload(url, raw_payload or {})
+            self.cache[url] = raw_payload
+
+        try:
+            return self._build_structured_data(raw_payload)
+        except Exception as exc:
+            print(f"[CACHE] Failed to rebuild structured data for {url}: {exc}")
+            return None
     
     def scrape_website(self, url: str) -> Dict:
         """
@@ -234,38 +385,21 @@ class WebsiteScraper:
                     "content_type": getattr(metadata_obj, "content_type", ""),
                 }
             
-            # Process and structure the data
-            headings = self._extract_headings_from_markdown(markdown_content)
-            chunks = self._create_smart_chunks(markdown_content)
-            all_links = self._categorize_links(links, url)
-            
-            structured_data = {
+            raw_payload = {
                 "url": url,
-                "title": metadata.get("title", ""),
-                "description": metadata.get("description", ""),
-                "keywords": metadata.get("keywords", ""),
-                "og_title": metadata.get("og_title", ""),
-                "og_description": metadata.get("og_description", ""),
                 "markdown_content": markdown_content,
                 "html_content": html_content,
-                "main_content": self._extract_main_content(markdown_content),
-                "headings": headings,
-                "structured_chunks": chunks,
-                "chunks": chunks,
-                "total_chunks": len(chunks),
-                "all_links": all_links,
-                "internal_pages": all_links.get("internal", []),
-                "external_links": all_links.get("external", []),
-                "contact_info": self._extract_contact_info(markdown_content, html_content, links, chunks),
                 "metadata": metadata,
-                "language": metadata.get("language", "en"),
+                "links": links,
                 "scraper_used": "firecrawl"
             }
-            
-            print(f"[SCRAPER] Processed {len(structured_data['chunks'])} content chunks")
-            
+
+            structured_data = self._build_structured_data(raw_payload)
+
+            print(f"[SCRAPER] Processed {structured_data.get('total_chunks', 0)} content chunks")
+
             # Save to cache
-            self._save_to_cache(url, structured_data)
+            self._save_to_cache(url, raw_payload)
             
             return structured_data
             
@@ -315,38 +449,21 @@ class WebsiteScraper:
             for a_tag in soup.find_all('a', href=True):
                 links.append(a_tag['href'])
             
-            # Process and structure the data
-            headings = self._extract_headings_from_markdown(markdown_content)
-            chunks = self._create_smart_chunks(markdown_content)
-            all_links = self._categorize_links(links, url)
-            
-            structured_data = {
+            raw_payload = {
                 "url": url,
-                "title": metadata.get("title", ""),
-                "description": metadata.get("description", ""),
-                "keywords": metadata.get("keywords", ""),
-                "og_title": metadata.get("og_title", ""),
-                "og_description": metadata.get("og_description", ""),
                 "markdown_content": markdown_content,
                 "html_content": str(soup),
-                "main_content": self._extract_main_content(markdown_content),
-                "headings": headings,
-                "structured_chunks": chunks,
-                "chunks": chunks,
-                "total_chunks": len(chunks),
-                "all_links": all_links,
-                "internal_pages": all_links.get("internal", []),
-                "external_links": all_links.get("external", []),
-                "contact_info": self._extract_contact_info(markdown_content, str(soup), links, chunks),
                 "metadata": metadata,
-                "language": metadata.get("language", "en"),
+                "links": links,
                 "scraper_used": "beautifulsoup"
             }
-            
-            print(f"[SCRAPER] BeautifulSoup fallback processed {len(structured_data['chunks'])} content chunks")
-            
+
+            structured_data = self._build_structured_data(raw_payload)
+
+            print(f"[SCRAPER] BeautifulSoup fallback processed {structured_data.get('total_chunks', 0)} content chunks")
+
             # Save to cache
-            self._save_to_cache(url, structured_data)
+            self._save_to_cache(url, raw_payload)
             
             return structured_data
             
@@ -403,35 +520,97 @@ class WebsiteScraper:
         return content.strip()
     
     def _create_smart_chunks(self, markdown: str) -> List[str]:
-        """Create intelligent chunks from markdown content"""
-        chunks = []
-        current_chunk = []
-        current_length = 0
+        """Create section-aware chunks from markdown content."""
+
+        if not markdown:
+            return []
+
         max_chunk_size = 1500
-        
-        lines = markdown.split("\n")
-        
+        min_chunk_length = 80
+
+        def split_section(section_text: str, heading: Optional[str]) -> List[str]:
+            text = section_text.strip()
+            if not text:
+                return []
+
+            if len(text) <= max_chunk_size:
+                return [text]
+
+            paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+            if not paragraphs:
+                # Fallback to fixed-width splitting
+                return [text[i:i + max_chunk_size] for i in range(0, len(text), max_chunk_size)]
+
+            parts: List[str] = []
+            current: List[str] = []
+
+            for paragraph in paragraphs:
+                candidate = "\n\n".join(current + [paragraph]).strip()
+                if len(candidate) > max_chunk_size and current:
+                    parts.append("\n\n".join(current))
+                    current = [paragraph]
+                else:
+                    current.append(paragraph)
+
+            if current:
+                parts.append("\n\n".join(current))
+
+            formatted: List[str] = []
+            for idx, part in enumerate(parts):
+                part_text = part.strip()
+                if not part_text:
+                    continue
+                if heading and not part_text.startswith(heading):
+                    prefix = heading if idx == 0 else f"{heading} (cont.)"
+                    formatted.append(f"{prefix}\n{part_text}".strip())
+                else:
+                    formatted.append(part_text)
+            return formatted
+
+        chunks: List[str] = []
+        lines = markdown.splitlines()
+        current_heading: Optional[str] = None
+        current_lines: List[str] = []
+
+        def flush_current_section():
+            if not current_lines and not current_heading:
+                return
+            section_lines: List[str] = []
+            if current_heading:
+                section_lines.append(current_heading)
+            section_lines.extend(current_lines)
+            section_text = "\n".join(section_lines)
+            chunks.extend(split_section(section_text, current_heading))
+
+        heading_pattern = re.compile(r"^(#{1,6}\s+.+)")
+
         for line in lines:
-            line_length = len(line)
-            
-            if line.strip().startswith("# ") and current_chunk and current_length > 300:
-                chunks.append("\n".join(current_chunk))
-                current_chunk = []
-                current_length = 0
-            
-            current_chunk.append(line)
-            current_length += line_length
-            
-            if current_length >= max_chunk_size:
-                chunks.append("\n".join(current_chunk))
-                current_chunk = []
-                current_length = 0
-        
-        if current_chunk:
-            chunks.append("\n".join(current_chunk))
-        
-        chunks = [chunk.strip() for chunk in chunks if len(chunk.strip()) > 100]
-        return chunks
+            heading_match = heading_pattern.match(line.strip())
+            if heading_match:
+                flush_current_section()
+                current_heading = heading_match.group(1).strip()
+                current_lines = []
+            else:
+                current_lines.append(line)
+
+        flush_current_section()
+
+        # If there was content before the first heading, make sure it's captured
+        if not chunks and current_lines:
+            chunks.extend(split_section("\n".join(current_lines), None))
+
+        cleaned_chunks = []
+        seen: set[str] = set()
+        for chunk in chunks:
+            trimmed = chunk.strip()
+            if len(trimmed) < min_chunk_length:
+                continue
+            if trimmed in seen:
+                continue
+            seen.add(trimmed)
+            cleaned_chunks.append(trimmed)
+
+        return cleaned_chunks
     
     def _categorize_links(self, links: List[str], base_url: str) -> Dict[str, List[Dict]]:
         """Categorize links into different types"""
@@ -475,196 +654,245 @@ class WebsiteScraper:
         
         return categorized
     
-    def _extract_contact_info(self, markdown: str, html: str, links: List[str], chunks: Optional[List[str]] = None) -> Dict:
-        """Extract contact information"""
-        contact_info = {"emails": [], "phones": [], "addresses": [], "social_media": {}}
-        links = links or []
-        
-        text_sources = [markdown or ""]
-        if chunks:
-            text_sources.extend(chunks[:20])
+    def _extract_contact_info(
+        self,
+        markdown: str,
+        html: str,
+        links: List[Any],
+        chunks: Optional[List[str]] = None,
+        base_url: str = ""
+    ) -> Dict:
+        """Collect footer/contact page context and let the LLM summarise it into structured data."""
 
-        if not any(text_sources) and html:
-            try:
-                text_sources.append(self.html_converter.handle(html))
-            except Exception:
-                text_sources.append(html)
-
-        combined_text = "\n".join([source for source in text_sources if source])
-
-        email_pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"
-        emails = set(re.findall(email_pattern, combined_text))
-
-        for link in links:
-            href = ""
-            if isinstance(link, dict):
-                href = str(link.get("url") or link.get("href") or "")
-            else:
-                href = str(link)
-            if href.startswith("mailto:"):
-                emails.add(href.split(":", 1)[1])
-
-        filtered_emails = [email for email in emails if not any(skip in email.lower() for skip in ["example.com", "test.com", "domain.com", "yourcompany.com"])]
-        contact_info["emails"] = sorted(filtered_emails)[:8]
-
-        phone_pattern = r"(?:(?:\+\d{1,3}[\s-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s-]?)?(?:\d{3,4}[\s-]?){2,3}\d{3,4}"
-        raw_phone_matches = re.findall(phone_pattern, combined_text)
-
-        cleaned_phones = set()
-        for match in raw_phone_matches:
-            digits = re.sub(r"\D", "", match)
-            if 9 <= len(digits) <= 15:
-                normalized = self._format_phone_number(match)
-                if normalized:
-                    cleaned_phones.add(normalized)
-
-        contact_info["phones"] = sorted(cleaned_phones)[:8]
-
-        contact_info["addresses"] = self._extract_addresses_from_markdown(combined_text)
-
-        social_platforms = {
-            "facebook": "facebook.com",
-            "twitter": "twitter.com",
-            "x": "x.com",
-            "linkedin": "linkedin.com",
-            "instagram": "instagram.com",
-            "youtube": "youtube.com",
-            "github": "github.com",
-            "tiktok": "tiktok.com"
+        default_info = {
+            "emails": [],
+            "phones": [],
+            "addresses": [],
+            "social_media": {},
+            "other_contacts": []
         }
 
-        for platform, domain in social_platforms.items():
-            platform_links = []
-            for link in links:
-                link_url = ""
-                if isinstance(link, dict):
-                    link_url = str(link.get("url") or link.get("href") or "")
-                    display = link.get("url") or link.get("text") or link_url
-                else:
-                    link_url = str(link)
-                    display = link_url
-                if domain in link_url.lower():
-                    platform_links.append(display)
-            if platform_links:
-                contact_info["social_media"][platform] = platform_links[:8]
+        context_chunks: List[str] = []
 
-        validation_context = combined_text[:6000]
-        contact_info["emails"] = self._validate_contact_field("email addresses", contact_info["emails"], validation_context)
-        contact_info["phones"] = self._validate_contact_field("phone numbers", contact_info["phones"], validation_context)
-        contact_info["addresses"] = self._validate_contact_field("physical addresses", contact_info["addresses"], validation_context)
+        if html:
+            try:
+                soup = BeautifulSoup(html, "lxml")
+                footer = soup.find("footer")
+                if footer:
+                    footer_text = footer.get_text(" ", strip=True)
+                    if footer_text:
+                        context_chunks.append(f"Footer\n{footer_text}")
+            except Exception as exc:
+                print(f"[SCRAPER] Footer extraction failed: {exc}")
 
-        flat_social = []
-        for platform, entries in contact_info["social_media"].items():
-            for entry in entries:
-                flat_social.append(f"{platform}:{entry}")
+        contact_links = self._find_contact_links(links, base_url)
+        for contact_url in contact_links[:2]:
+            page_text = self._fetch_contact_page_text(contact_url)
+            if page_text:
+                context_chunks.append(f"Contact page ({contact_url})\n{page_text}")
 
-        validated_social = self._validate_contact_field("social media links", flat_social, validation_context)
-        rebuilt_social = {}
-        for item in validated_social:
-            if ":" in item:
-                platform, link_value = item.split(":", 1)
-                platform = platform.strip()
-                rebuilt_social.setdefault(platform, [])
-                link = link_value.strip()
-                if link and link not in rebuilt_social[platform]:
-                    rebuilt_social[platform].append(link)
+        if not context_chunks and markdown:
+            tail = markdown[-1800:]
+            if tail:
+                context_chunks.append(f"Page excerpt\n{tail}")
 
-        if rebuilt_social:
-            for platform in rebuilt_social:
-                rebuilt_social[platform] = rebuilt_social[platform][:5]
-            contact_info["social_media"] = rebuilt_social
+        if not context_chunks:
+            return default_info
 
-        return contact_info
+        combined_context = "\n\n---\n\n".join(context_chunks)
+        combined_context = combined_context[:8000]
 
-    def _format_phone_number(self, phone: str) -> Optional[str]:
-        digits = re.sub(r"\D", "", phone)
-        if not digits:
-            return None
-        if len(digits) == 10:
-            return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
-        if len(digits) == 11 and digits.startswith("1"):
-            return f"+1 {digits[1:4]}-{digits[4:7]}-{digits[7:]}"
-        if len(digits) >= 11:
-            return f"+{digits[:len(digits)-10]} {digits[-10:-7]}-{digits[-7:-4]}-{digits[-4:]}"
-        return phone.strip()
+        system_prompt = (
+            "You analyse website contact information. "
+            "Return concise details that appear in the provided context only."
+        )
+        human_prompt = (
+            "Extract contact details from the context below. "
+            "If a field is missing, return an empty list/dict. Respond with valid JSON only, matching this schema exactly:\n"
+            "{{\n"
+            "  \"emails\": [string],\n"
+            "  \"phones\": [string],\n"
+            "  \"addresses\": [string],\n"
+            "  \"social_media\": {{platform: [string]}},\n"
+            "  \"other_contacts\": [string]\n"
+            "}}\n\n"
+            "Context:\n{context}"
+        )
 
-    def _extract_addresses_from_markdown(self, text: str) -> List[str]:
-        lines = [line.strip() for line in text.splitlines()]
-        addresses = []
-        for idx, line in enumerate(lines):
-            if not line:
-                continue
-            if re.search(r"\b(address|location|headquarters|office|hq)\b", line, re.IGNORECASE):
-                collected = []
-                base_line = re.sub(r"(?i)^(address|location|headquarters|office|hq)[:\-]*", "", line).strip()
-                if base_line:
-                    collected.append(base_line)
-                j = idx + 1
-                while j < len(lines) and lines[j] and len(collected) < 4:
-                    collected.append(lines[j])
-                    j += 1
-                candidate = " ".join(collected).strip()
-                if candidate and self._looks_like_address(candidate):
-                    addresses.append(candidate)
-
-        unique_addresses = []
-        seen = set()
-        for address in addresses:
-            key = address.lower()
-            if key not in seen:
-                seen.add(key)
-                unique_addresses.append(address)
-
-        return unique_addresses[:3]
-
-    def _looks_like_address(self, candidate: str) -> bool:
-        if len(candidate) < 10:
-            return False
-        if re.search(r"\d{1,5}\s+\w+", candidate) and re.search(r"(street|st\.?|avenue|ave\.?|road|rd\.?|boulevard|blvd\.?|suite|floor|drive|dr\.?|lane|ln\.?|city|state|zip|postal|country)", candidate, re.IGNORECASE):
-            return True
-        if re.search(r"\b[A-Z][a-z]+,\s*[A-Z]{2}\b", candidate):
-            return True
-        if re.search(r"\b\d{5}(-\d{4})?\b", candidate):
-            return True
-        return False
-
-    def _validate_contact_field(self, field_name: str, candidates: List[str], context: str) -> List[str]:
-        if not candidates:
-            return []
         try:
-            prompt = ChatPromptTemplate.from_template(
-                """You are validating contact details extracted from a website.
-Context:
-{context}
-
-Candidates ({field_name}):
-{candidates}
-
-Return ONLY a JSON array of the candidates that are explicitly supported by the context text. Use the exact text for each confirmed entry. If none are valid, return []."""
-            )
-
-            messages = prompt.format_messages(context=context, field_name=field_name, candidates=json.dumps(candidates))
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                ("human", human_prompt)
+            ])
+            messages = prompt.format_messages(context=combined_context)
             response = self.llm.invoke(messages)
-            content = response.content.strip()
+            parsed = self._parse_contact_response(response.content)
+            if parsed:
+                return self._normalize_contact_result(parsed, default_info)
+        except Exception as exc:
+            print(f"[SCRAPER] Contact extraction via LLM failed: {exc}")
 
-            json_start = content.find('[')
-            json_end = content.rfind(']') + 1
-            if json_start != -1 and json_end > json_start:
-                try:
-                    parsed = json.loads(content[json_start:json_end])
-                    if isinstance(parsed, list):
-                        cleaned = []
-                        seen = set()
-                        for item in parsed:
-                            if not isinstance(item, str):
-                                continue
-                            value = item.strip()
-                            if value and value in candidates and value not in seen:
-                                seen.add(value)
-                                cleaned.append(value)
-                        return cleaned
-                except json.JSONDecodeError:
-                    pass
-        except Exception as e:
-            print(f"[SCRAPER] Contact validation error for {field_name}: {e}")
-        return candidates[:5]
+        return default_info
+
+    def _find_contact_links(self, links: List[Any], base_url: str) -> List[str]:
+        candidates: List[str] = []
+        if not links:
+            return candidates
+
+        keywords = ["contact", "support", "help", "customer", "about"]
+        for raw_link in links:
+            if isinstance(raw_link, dict):
+                href = str(raw_link.get("url") or raw_link.get("href") or "")
+            else:
+                href = str(raw_link or "")
+
+            if not href:
+                continue
+
+            combined = urljoin(base_url, href) if base_url else href
+            lower = combined.lower()
+            if any(keyword in lower for keyword in keywords):
+                candidates.append(combined)
+
+        # Preserve order but remove duplicates
+        seen = set()
+        ordered: List[str] = []
+        for url_candidate in candidates:
+            if url_candidate not in seen:
+                seen.add(url_candidate)
+                ordered.append(url_candidate)
+        return ordered
+
+    def _fetch_contact_page_text(self, url: str) -> Optional[str]:
+        if not url:
+            return None
+
+        try:
+            if self.use_firecrawl and self.app:
+                page = self.app.scrape(url, formats=["markdown"], only_main_content=True, wait_for=1500)
+                if page:
+                    markdown = getattr(page, "markdown", "")
+                    if markdown:
+                        return markdown
+
+            response = requests.get(url, headers=self.headers, timeout=8)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "lxml")
+            return soup.get_text(" ", strip=True)
+        except Exception as exc:
+            print(f"[SCRAPER] Could not fetch contact page {url}: {exc}")
+            return None
+
+    def _parse_contact_response(self, content: str) -> Optional[Dict[str, Any]]:
+        if not content:
+            return None
+
+        text = content.strip()
+
+        fence_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start == -1 or end <= start:
+            return None
+
+        candidate = text[start:end]
+
+        def _normalise_quotes(payload: str) -> str:
+            replacements = {
+                "\u201c": '"',
+                "\u201d": '"',
+                "\u2018": "'",
+                "\u2019": "'",
+            }
+            for bad, good in replacements.items():
+                payload = payload.replace(bad, good)
+            return payload
+
+        attempts = []
+
+        base_candidate = candidate.strip()
+        if base_candidate:
+            attempts.append(base_candidate)
+
+        cleaned_trailing_commas = re.sub(r",\s*([}\]])", r"\1", base_candidate)
+        if cleaned_trailing_commas != base_candidate:
+            attempts.append(cleaned_trailing_commas)
+
+        normalized_quotes = _normalise_quotes(base_candidate)
+        if normalized_quotes not in attempts:
+            attempts.append(normalized_quotes)
+
+        normalized_quotes_cleaned = re.sub(r",\s*([}\]])", r"\1", normalized_quotes)
+        if normalized_quotes_cleaned not in attempts:
+            attempts.append(normalized_quotes_cleaned)
+
+        last_error: Optional[Exception] = None
+        for attempt in attempts:
+            try:
+                return json.loads(attempt)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                continue
+
+        if last_error:
+            try:
+                literal_candidate = ast.literal_eval(base_candidate)
+                if isinstance(literal_candidate, dict):
+                    return literal_candidate
+            except Exception:
+                pass
+
+        if last_error:
+            print(f"[SCRAPER] Contact JSON parse failed: {last_error}")
+            if hasattr(last_error, "doc"):
+                snippet = last_error.doc
+                if snippet:
+                    print(f"[SCRAPER] Contact JSON snippet: {snippet[:200]}")
+
+        return None
+
+    def _normalize_contact_result(self, data: Dict[str, Any], default_info: Dict[str, Any]) -> Dict[str, Any]:
+        result = {key: default_info.get(key, []) for key in default_info}
+
+        def _extract_list(key: str) -> List[str]:
+            raw_value = data.get(key)
+            if isinstance(raw_value, list):
+                cleaned = []
+                for item in raw_value:
+                    if isinstance(item, str):
+                        value = item.strip()
+                        if value and value not in cleaned:
+                            cleaned.append(value)
+                return cleaned
+            return []
+
+        result["emails"] = _extract_list("emails")[:8]
+        result["phones"] = _extract_list("phones")[:8]
+        result["addresses"] = _extract_list("addresses")[:5]
+        result["other_contacts"] = _extract_list("other_contacts")[:5]
+
+        social_media: Dict[str, List[str]] = {}
+        raw_social = data.get("social_media")
+        if isinstance(raw_social, dict):
+            for platform, entries in raw_social.items():
+                if not isinstance(platform, str):
+                    continue
+                if isinstance(entries, list):
+                    cleaned_entries = []
+                    for entry in entries:
+                        if isinstance(entry, str):
+                            value = entry.strip()
+                            if value and value not in cleaned_entries:
+                                cleaned_entries.append(value)
+                    if cleaned_entries:
+                        social_media[platform.strip().lower()] = cleaned_entries[:5]
+                elif isinstance(entries, str):
+                    value = entries.strip()
+                    if value:
+                        social_media.setdefault(platform.strip().lower(), []).append(value)
+
+        result["social_media"] = social_media
+        return result

@@ -1,11 +1,11 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import os
+from datetime import datetime
+from urllib.parse import urljoin
 from langchain_groq import ChatGroq
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
-from langchain.memory import ConversationBufferMemory
-from api.agent_tools import create_agent_executor
 from api.groq_services import GroqCompoundClient
+from api.chunk_search import ChunkSearcher
 
 class ConversationalAgent:
     def __init__(self, groq_client: Optional[GroqCompoundClient] = None):
@@ -15,16 +15,21 @@ class ConversationalAgent:
             groq_api_key=os.environ.get("GROQ_API_KEY", "")
         )
         self.groq_client = groq_client or GroqCompoundClient()
-        
-        # Simple in-memory cache for website data
-        self.website_cache = {}
-        self.use_agent_tools = True  # Enable agent with tool calling
-    
+
+        # In-memory cache keyed by URL
+        self.website_cache: Dict[str, Dict[str, Any]] = {}
+
     def cache_website_data(self, url: str, scraped_data: Dict, insights: Dict):
-        """Cache website data for conversational context"""
+        """Cache website data, including a BM25 chunk search index."""
+        chunks = scraped_data.get('structured_chunks', []) or []
+        chunk_searcher = ChunkSearcher(chunks) if chunks else None
+
         self.website_cache[url] = {
             'scraped_data': scraped_data,
-            'insights': insights
+            'insights': insights,
+            'chunk_searcher': chunk_searcher,
+            'chunks': chunks,
+            'live_visits': [],
         }
     
     def get_cached_data(self, url: str) -> Optional[Dict]:
@@ -32,9 +37,11 @@ class ConversationalAgent:
         return self.website_cache.get(url)
     
     def chat(self, url: str, query: str, conversation_history: Optional[List[Dict]] = None) -> str:
-        """
-        Handle conversational queries about a website using agent with tool calling.
-        Uses cached data if available, otherwise returns error.
+        """Answer conversational queries about a previously analyzed website.
+
+        Uses cached insights and in-memory BM25 search over markdown chunks to build
+        focused context for the LLM. Requires that the site has been analyzed and
+        cached via ``cache_website_data``.
         """
         
         # Get cached data
@@ -44,58 +51,22 @@ class ConversationalAgent:
             return "I don't have information about this website yet. Please analyze it first using the /api/analyze endpoint."
         
         try:
-            # Create agent executor with the scraped data
-            agent_executor = create_agent_executor(
-                self.llm,
-                cached.get('scraped_data', {}),
-                cached.get('insights', {}),
-                groq_client=self.groq_client
-            )
-            
-            # Convert history to LangChain format
-            chat_history = []
-            if conversation_history:
-                for msg in conversation_history[-5:]:  # Keep last 5 messages
-                    if msg.get('role') == 'user':
-                        chat_history.append(HumanMessage(content=msg.get('content', '')))
-                    elif msg.get('role') == 'assistant':
-                        chat_history.append(AIMessage(content=msg.get('content', '')))
-            
-            # Invoke agent with tool calling
-            result = agent_executor.invoke({
-                "input": query,
-                "chat_history": chat_history
-            })
-            
-            return result['output']
-            
-        except Exception as e:
-            print(f"[API] Agent error: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            
-            # Fallback to basic LLM response
-            context = self._prepare_conversation_context(cached)
-            messages = [
-                SystemMessage(content=f"""You are an AI assistant that helps users understand websites and businesses. 
-You have analyzed a website and have the following information:
+            self._maybe_run_live_visit(url, query, cached)
+            context = self._build_context(cached, query)
 
-{context}
+            messages: List[Any] = [
+                SystemMessage(content="""You are an AI assistant that helps users understand websites and businesses.
+You have access to processed website insights, contact details, and retrieved content snippets.
 
-IMPORTANT FORMATTING RULES:
-- Always format your responses using Markdown syntax
-- Use Markdown tables (| column | column |) instead of HTML tables
-- NEVER use HTML tags like <br>, <table>, <td>, <tr>, <div>, <span>, etc.
-- For line breaks in table cells, just use a single line or separate with commas
-- Use **bold** and *italic* for emphasis
-- Use `code` for inline code
-- Use - or * for bullet lists on new lines
-- Use # ## ### for headings
-
-Answer user questions based on this information. Be conversational, helpful, and concise. 
-If you don't have specific information to answer a question, say so honestly.""")
+GUIDELINES:
+- Always answer using Markdown formatting.
+- Prefer concise paragraphs (1-3 sentences) or short bullet lists when listing facts.
+- Use **bold** for key facts, `code` for short data (like emails), and tables when presenting multiple comparable items.
+- Be transparent about uncertainty; if information is missing in the provided context, say so.
+- Cite the provided snippets when relevant by referencing their chunk numbers (e.g., "(Chunk 2)").
+""")
             ]
-            
+
             if conversation_history:
                 for msg in conversation_history[-5:]:
                     role = msg.get("role", "user")
@@ -104,55 +75,238 @@ If you don't have specific information to answer a question, say so honestly."""
                         messages.append(HumanMessage(content=content))
                     elif role == "assistant":
                         messages.append(AIMessage(content=content))
-            
-            messages.append(HumanMessage(content=query))
-            
-            try:
-                response = self.llm.invoke(messages)
-                return response.content.strip()
-            except Exception as fallback_error:
-                return f"I encountered an error processing your question: {str(fallback_error)}"
+
+            context_prompt = f"""Website Context:
+{context}
+
+User Question: {query}
+"""
+            messages.append(HumanMessage(content=context_prompt))
+
+            response = self.llm.invoke(messages)
+            return response.content.strip()
+
+        except Exception as error:
+            print(f"[API] Chat error: {error}")
+            import traceback
+            traceback.print_exc()
+            return "I ran into an issue while answering. Please try rephrasing your question or re-running the analysis."
+
+    def _is_live_visit_enabled(self) -> bool:
+        return bool(self.groq_client and self.groq_client.is_available and self.groq_client.enable_visit)
+
+    def _maybe_run_live_visit(self, base_url: str, query: str, cached: Dict[str, Any]) -> None:
+        if not self._is_live_visit_enabled():
+            return
+
+        query_lower = (query or "").lower()
+        trigger_keywords = {"pricing", "price", "plan", "plans", "cost", "subscription", "package", "latest", "update"}
+        should_trigger = any(keyword in query_lower for keyword in trigger_keywords)
+
+        if not should_trigger:
+            return
+
+        target_url = self._select_live_visit_target(base_url, query_lower, cached)
+        if not target_url:
+            return
+
+        visits: List[Dict[str, Any]] = cached.setdefault('live_visits', [])
+        if any(visit.get('url') == target_url for visit in visits):
+            return
+
+        instructions = "Summarise pricing plans, tiers, costs, and any key calls to action you find." if "pricing" in query_lower or "price" in query_lower else None
+        result = self.groq_client.visit_website(target_url, instructions)
+
+        if not result:
+            return
+
+        content = (result or {}).get('content', '')
+        entry = {
+            'url': result.get('url', target_url),
+            'content': content,
+            'query': query,
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'executed_tools': result.get('executed_tools'),
+            'error': result.get('error'),
+        }
+        visits.append(entry)
+
+        if content:
+            self._blend_live_content_into_cache(cached, content)
+
+    def _select_live_visit_target(self, base_url: str, query_lower: str, cached: Dict[str, Any]) -> Optional[str]:
+        scraped = cached.get('scraped_data', {}) or {}
+        all_links = scraped.get('all_links', {}) or {}
+
+        candidate_urls: List[str] = []
+        internal_links = all_links.get('internal', []) or []
+        for link in internal_links:
+            href = str(link.get('url') or '')
+            if not href:
+                continue
+            text = str(link.get('text') or '').lower()
+            if 'pric' in href.lower() or 'pric' in text:
+                candidate_urls.append(href)
+
+        contact_pages = all_links.get('contact_pages', []) or []
+        for link in contact_pages:
+            href = str(link.get('url') or '')
+            if href:
+                candidate_urls.append(href)
+
+        if 'pricing' in query_lower or 'price' in query_lower or 'plan' in query_lower:
+            for href in candidate_urls:
+                if 'pric' in href.lower():
+                    return href
+
+        if candidate_urls:
+            return candidate_urls[0]
+
+        if base_url:
+            base = base_url.rstrip('/')
+            if 'pricing' in query_lower or 'price' in query_lower or 'plan' in query_lower:
+                return urljoin(base + '/', 'pricing/')
+
+        return base_url
+
+    def _blend_live_content_into_cache(self, cached: Dict[str, Any], content: str) -> None:
+        snippet = (content or '').strip()
+        if not snippet:
+            return
+
+        normalized = snippet.replace('\r\n', '\n').strip()
+        if not normalized:
+            return
+
+        segments: List[str] = []
+        max_length = 900
+        prefix = "[Live Visit] "
+
+        remaining = normalized
+        while remaining:
+            segment = remaining[:max_length].strip()
+            if segment:
+                segments.append(f"{prefix}{segment}")
+            if len(segments) >= 5:
+                break
+            if len(remaining) <= max_length:
+                break
+            remaining = remaining[max_length:]
+
+        if not segments:
+            return
+
+        chunks: List[str] = cached.setdefault('chunks', [])
+        chunks.extend(segments)
+        cached['chunk_searcher'] = ChunkSearcher(chunks)
     
-    def _prepare_conversation_context(self, cached_data: Dict) -> str:
-        """Prepare context string from cached website data"""
-        
+    def _build_context(self, cached_data: Dict[str, Any], query: str) -> str:
         scraped = cached_data.get('scraped_data', {})
         insights = cached_data.get('insights', {})
-        
-        context_parts = [
-            f"Website URL: {scraped.get('url', 'N/A')}",
-            f"Title: {scraped.get('title', 'N/A')}",
-            f"\nBusiness Insights:",
-            f"- Industry: {insights.get('industry', 'N/A')}",
-            f"- Company Size: {insights.get('company_size', 'N/A')}",
-            f"- Location: {insights.get('location', 'N/A')}",
-            f"- USP: {insights.get('usp', 'N/A')}",
-            f"- Products/Services: {insights.get('products_services', 'N/A')}",
-            f"- Target Audience: {insights.get('target_audience', 'N/A')}",
-        ]
-        
-        # Add contact info if available
-        contact = insights.get('contact_info', {})
+        searcher: Optional[ChunkSearcher] = cached_data.get('chunk_searcher')
+        chunks: List[str] = cached_data.get('chunks', []) or []
+
+        context_lines: List[str] = []
+
+        url = scraped.get('url') or insights.get('url')
+        if url:
+            context_lines.append(f"URL: {url}")
+        title = scraped.get('title') or insights.get('title')
+        if title:
+            context_lines.append(f"Title: {title}")
+
+        summary = insights.get('summary')
+        if summary:
+            context_lines.append(f"Summary: {summary}")
+
+        core_facts = []
+        if insights.get('industry') and insights['industry'] != 'Unable to determine':
+            core_facts.append(f"Industry: {insights['industry']}")
+        if insights.get('location') and insights['location'] != 'Not found':
+            core_facts.append(f"Location: {insights['location']}")
+        if insights.get('company_size') and insights['company_size'] != 'Unable to determine':
+            core_facts.append(f"Company Size: {insights['company_size']}")
+        if insights.get('usp') and insights['usp'] != 'Unable to extract':
+            core_facts.append(f"USP: {insights['usp']}")
+        if insights.get('products_services') and insights['products_services'] != 'Unable to extract':
+            core_facts.append(f"Products/Services: {insights['products_services']}")
+        if insights.get('target_audience') and insights['target_audience'] != 'Unable to determine':
+            core_facts.append(f"Target Audience: {insights['target_audience']}")
+
+        if core_facts:
+            context_lines.append("Key Insights:")
+            context_lines.extend(f"- {fact}" for fact in core_facts)
+
+        contact = insights.get('contact_info') or {}
+        contact_lines = []
         if contact.get('emails'):
-            context_parts.append(f"- Emails: {', '.join(contact['emails'])}")
+            contact_lines.append(f"Emails: {', '.join(contact['emails'])}")
         if contact.get('phones'):
-            context_parts.append(f"- Phones: {', '.join(contact['phones'])}")
+            contact_lines.append(f"Phones: {', '.join(contact['phones'])}")
+        social = contact.get('social_media') or {}
+        if social:
+            formatted_social = ", ".join(f"{platform}: {links[0]}" for platform, links in social.items() if links)
+            if formatted_social:
+                contact_lines.append(f"Social: {formatted_social}")
+        if contact_lines:
+            context_lines.append("Contact Info:")
+            context_lines.extend(f"- {line}" for line in contact_lines)
 
         live_visit = insights.get('groq_live_visit')
         if isinstance(live_visit, dict) and live_visit.get('content'):
-            context_parts.append("\nLive Website Snapshot (Groq Visit):")
-            context_parts.append(live_visit['content'][:1500])
+            snippet = live_visit['content'][:600].strip()
+            context_lines.append("Live Visit Snapshot:")
+            context_lines.append(f"- {snippet}")
 
         live_browser = insights.get('groq_browser_research')
-        if isinstance(live_browser, dict) and live_browser:
-            context_parts.append("\nLive Browser Research Highlights:")
+        if isinstance(live_browser, dict):
+            highlights = []
             for question, data in list(live_browser.items())[:2]:
                 if isinstance(data, dict) and data.get('content'):
-                    context_parts.append(f"- {question}: {data['content'][:400]}")
-        
-        # Add main content snippet
-        main_content = scraped.get('main_content', '')[:1500]
-        if main_content:
-            context_parts.append(f"\nContent Snippet:\n{main_content}")
-        
-        return "\n".join(context_parts)
+                    highlights.append(f"{question}: {data['content'][:400].strip()}")
+            if highlights:
+                context_lines.append("Live Research Highlights:")
+                context_lines.extend(f"- {item}" for item in highlights)
+
+        live_visits_cached = cached_data.get('live_visits') or []
+        if live_visits_cached:
+            context_lines.append("Additional Live Visit Content:")
+            for visit in live_visits_cached[-2:]:
+                if visit.get('error'):
+                    context_lines.append(f"- {visit.get('url', url)}: (error) {visit['error']}")
+                    continue
+                visit_snippet = str(visit.get('content', '')).strip()
+                if visit_snippet:
+                    if len(visit_snippet) > 500:
+                        visit_snippet = visit_snippet[:500].rstrip() + "..."
+                    context_lines.append(f"- {visit.get('url', url)} (fetched {visit.get('timestamp', 'recently')}): {visit_snippet}")
+                else:
+                    context_lines.append(f"- {visit.get('url', url)}: (no content returned)")
+
+        # Retrieve relevant chunks via BM25
+        retrieved_chunks: List[str] = []
+        if searcher:
+            results = searcher.search(query, top_k=4)
+            for result in results:
+                snippet = result.text.strip()
+                if len(snippet) > 650:
+                    snippet = snippet[:650].rstrip() + "..."
+                retrieved_chunks.append(f"Chunk {result.index + 1}: {snippet}")
+
+        if not retrieved_chunks and chunks:
+            fallback_chunk = chunks[0][:650].strip()
+            retrieved_chunks.append(f"Chunk 1: {fallback_chunk}")
+
+        if retrieved_chunks:
+            context_lines.append("Relevant Content Snippets:")
+            context_lines.extend(f"- {chunk}" for chunk in retrieved_chunks)
+
+        # Include previous answers if available
+        custom_answers = insights.get('custom_answers') or {}
+        if custom_answers:
+            context_lines.append("Custom Question Answers:")
+            for question, answer in list(custom_answers.items())[:3]:
+                answer_text = str(answer)[:400].strip()
+                context_lines.append(f"- {question}: {answer_text}")
+
+        return "\n".join(context_lines)

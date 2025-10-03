@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import os
 from langchain_groq import ChatGroq
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
@@ -7,10 +7,13 @@ import json
 import re
 
 from api.groq_services import GroqCompoundClient
+from api.chunk_search import ChunkSearcher, ChunkSearchResult
+from api.chunk_search import ChunkSearcher, ChunkSearchResult
 
 
 # Define structured output models
 class BusinessInsights(BaseModel):
+    summary: str = Field(description="Concise AI summary of the website")
     industry: str = Field(description="Primary industry or sector")
     company_size: str = Field(description="Estimated company size (startup/small/medium/large/enterprise)")
     location: str = Field(description="Company headquarters or primary location")
@@ -34,6 +37,37 @@ class AIAnalyzer:
             self.browser_question_limit = int(os.environ.get("GROQ_BROWSER_QUESTION_LIMIT", "3"))
         except ValueError:
             self.browser_question_limit = 3
+
+    def _default_insight_values(self) -> Dict[str, str]:
+        return {
+            "summary": "Summary not available",
+            "industry": "Unable to determine",
+            "company_size": "Unable to determine",
+            "location": "Not found",
+            "usp": "Unable to extract",
+            "products_services": "Unable to extract",
+            "target_audience": "Unable to determine",
+            "sentiment": "neutral",
+        }
+
+    def _normalize_insights(self, insights: Dict[str, Any]) -> Dict[str, Any]:
+        defaults = self._default_insight_values()
+        normalized: Dict[str, Any] = {}
+
+        for key, default in defaults.items():
+            value = insights.get(key, default)
+            if isinstance(value, str):
+                value = value.strip()
+            if not value:
+                value = default
+            normalized[key] = value
+
+        # Preserve any additional keys (like errors) from the original payload
+        for key, value in insights.items():
+            if key not in normalized:
+                normalized[key] = value
+
+        return normalized
     
     def analyze_website(self, scraped_data: Dict, custom_questions: Optional[List[str]] = None) -> Dict:
         """Analyze website content using LangChain"""
@@ -41,15 +75,16 @@ class AIAnalyzer:
         # Prepare context from scraped data
         context = self._prepare_context(scraped_data)
         chunks = scraped_data.get('structured_chunks', [])
+        chunk_searcher = ChunkSearcher(chunks) if chunks else None
         
         # Get default insights using structured output with source tracking
-        default_insights, source_chunks = self._get_default_insights(context, chunks)
+        default_insights, source_chunks = self._get_default_insights(context, chunks, chunk_searcher)
         
         # Answer custom questions if provided
         custom_insights = {}
         custom_source_chunks = {}
         if custom_questions:
-            custom_result = self._answer_custom_questions(context, custom_questions, chunks)
+            custom_result = self._answer_custom_questions(context, custom_questions, chunks, chunk_searcher)
             custom_insights = custom_result['answers']
             custom_source_chunks = custom_result['source_chunks']
         
@@ -60,7 +95,7 @@ class AIAnalyzer:
         
         # Add source tracking for contact info
         contact_info = scraped_data.get('contact_info', {})
-        contact_sources = self._identify_contact_sources(contact_info, chunks)
+        contact_sources = self._identify_contact_sources(contact_info, chunks, chunk_searcher)
         all_source_chunks.update(contact_sources)
         
         live_visit = self._run_live_visit(scraped_data)
@@ -111,7 +146,12 @@ class AIAnalyzer:
 
         return "\n".join(context_parts)
     
-    def _get_default_insights(self, context: str, chunks: List[str]) -> tuple[Dict, Dict]:
+    def _get_default_insights(
+        self,
+        context: str,
+        chunks: List[str],
+        chunk_searcher: Optional[ChunkSearcher] = None
+    ) -> tuple[Dict, Dict]:
         """Extract default business insights using LangChain with source tracking"""
         
         try:
@@ -119,6 +159,7 @@ class AIAnalyzer:
             system_template = """You are an expert business analyst specializing in website analysis. 
 Analyze the provided website content and extract key business insights.
 Return your analysis as a JSON object with these exact keys:
+- summary: Concise AI-written overview of the business (1-2 sentences)
 - industry: Primary industry or sector
 - company_size: Estimated company size (startup/small/medium/large/enterprise)
 - location: Company headquarters or primary location
@@ -127,7 +168,7 @@ Return your analysis as a JSON object with these exact keys:
 - target_audience: Primary customer demographic or market segment
 - sentiment: Overall tone and sentiment of the website
 
-Be specific, concise, and accurate. Keep each field under 200 characters."""
+Be specific, concise, and accurate. Keep each field under 200 characters (summary up to 350 characters)."""
 
             human_template = """Analyze the following website content and return JSON:
 
@@ -163,39 +204,40 @@ Return only valid JSON, no other text:"""
                     print(f"[API] Successfully parsed JSON: {parsed}")
                     
                     # Track source chunks for each insight
-                    source_chunks = self._identify_source_chunks(parsed, chunks)
+                    normalized = self._normalize_insights(parsed)
+                    source_chunks = self._identify_source_chunks(normalized, chunks, chunk_searcher)
                     
-                    return parsed, source_chunks
+                    return normalized, source_chunks
                 except json.JSONDecodeError as je:
                     print(f"[API] JSON parse error: {je}")
             
             # Fallback: try to parse line by line or extract key-value pairs
             fallback_result = self._parse_llm_response_fallback(content)
-            source_chunks = self._identify_source_chunks(fallback_result, chunks)
-            return fallback_result, source_chunks
+            normalized = self._normalize_insights(fallback_result)
+            source_chunks = self._identify_source_chunks(normalized, chunks, chunk_searcher)
+            return normalized, source_chunks
             
         except Exception as e:
             print(f"Analysis error: {str(e)}")
             import traceback
             print(f"Analysis traceback: {traceback.format_exc()}")
-            fallback_result = {
-                "industry": "Unable to determine",
-                "company_size": "Unable to determine", 
-                "location": "Not found",
-                "usp": "Unable to extract",
-                "products_services": "Unable to extract",
-                "target_audience": "Unable to determine",
-                "sentiment": "neutral",
-                "error": str(e)
-            }
-            source_chunks = self._identify_source_chunks(fallback_result, chunks)
+            fallback_result = self._default_insight_values()
+            fallback_result["error"] = str(e)
+            source_chunks = self._identify_source_chunks(fallback_result, chunks, chunk_searcher)
             return fallback_result, source_chunks
     
-    def _identify_source_chunks(self, insights: Dict, chunks: List[str]) -> Dict:
-        source_chunks = {}
-        
-        # Keywords for each insight type
-        insight_keywords = {
+    def _identify_source_chunks(
+        self,
+        insights: Dict,
+        chunks: List[str],
+        chunk_searcher: Optional[ChunkSearcher] = None
+    ) -> Dict:
+        source_chunks: Dict[str, List[Dict[str, Any]]] = {}
+        defaults = self._default_insight_values()
+
+        # Keywords for heuristic fallback when BM25 does not produce matches
+        heuristic_keywords = {
+            'summary': ['summary', 'overview', 'company', 'business', 'focus', 'mission', 'vision', 'help', 'solution', 'platform'],
             'industry': ['industry', 'sector', 'business', 'company', 'market', 'field'],
             'company_size': ['employee', 'team', 'size', 'company', 'startup', 'enterprise', 'small', 'large', 'medium'],
             'location': ['location', 'headquarters', 'office', 'address', 'city', 'country', 'based'],
@@ -204,41 +246,62 @@ Return only valid JSON, no other text:"""
             'target_audience': ['customer', 'client', 'user', 'audience', 'market', 'target', 'who we serve'],
             'sentiment': ['professional', 'innovative', 'reliable', 'trusted', 'quality', 'experience']
         }
-        
-        for insight_key, keywords in insight_keywords.items():
-            if insight_key in insights and insights[insight_key] and insights[insight_key] != "Unable to determine":
-                relevant_chunks = []
-                
-                for i, chunk in enumerate(chunks[:10]):  # Check top 10 chunks
-                    chunk_lower = chunk.lower()
-                    score = 0
-                    
-                    # Count keyword matches
-                    for keyword in keywords:
-                        if keyword in chunk_lower:
-                            score += 1
-                    
-                    # Also check if insight value appears in chunk
-                    insight_value = str(insights[insight_key]).lower()
-                    if len(insight_value) > 3 and insight_value in chunk_lower:
+
+        for key in heuristic_keywords.keys():
+            insight_value = insights.get(key)
+            if not insight_value or insight_value == defaults.get(key):
+                source_chunks[key] = []
+                continue
+
+            bm25_results: List[ChunkSearchResult] = []
+            if chunk_searcher and isinstance(insight_value, str):
+                bm25_results = chunk_searcher.search(insight_value, top_k=3)
+
+            if bm25_results:
+                source_chunks[key] = [
+                    {
+                        'chunk_index': result.index,
+                        'chunk_text': result.text,
+                        'relevance_score': round(result.score, 4)
+                    }
+                    for result in bm25_results
+                ]
+                continue
+
+            # Fallback heuristic search if BM25 found nothing
+            relevant_chunks = []
+            keywords = heuristic_keywords[key]
+            for i, chunk in enumerate(chunks[:10]):
+                chunk_lower = chunk.lower()
+                score = 0
+
+                for keyword in keywords:
+                    if keyword in chunk_lower:
+                        score += 1
+
+                if isinstance(insight_value, str):
+                    insight_lower = insight_value.lower()
+                    if len(insight_lower) > 3 and insight_lower in chunk_lower:
                         score += 2
-                    
-                    if score > 0:
-                        relevant_chunks.append({
-                            'chunk_index': i,
-                            'chunk_text': chunk,
-                            'relevance_score': score
-                        })
-                
-                # Sort by relevance score and take top 3
-                relevant_chunks.sort(key=lambda x: x['relevance_score'], reverse=True)
-                source_chunks[insight_key] = relevant_chunks[:3]
-            else:
-                source_chunks[insight_key] = []
-        
+
+                if score > 0:
+                    relevant_chunks.append({
+                        'chunk_index': i,
+                        'chunk_text': chunk,
+                        'relevance_score': score
+                    })
+
+            relevant_chunks.sort(key=lambda x: x['relevance_score'], reverse=True)
+            source_chunks[key] = relevant_chunks[:3]
+
         return source_chunks
     
-    def _identify_contact_sources(self, contact_info: Dict, chunks: List[str]) -> Dict:
+    def _identify_contact_sources(
+        self,
+        contact_info: Dict,
+        chunks: List[str],
+        chunk_searcher: Optional[ChunkSearcher] = None
+    ) -> Dict:
         """Identify source chunks for contact information"""
         source_chunks = {}
         
@@ -250,46 +313,65 @@ Return only valid JSON, no other text:"""
         }
         
         for contact_type, keywords in contact_keywords.items():
-            if contact_type in contact_info and contact_info[contact_type]:
-                relevant_chunks = []
-                
-                for i, chunk in enumerate(chunks[:10]):  # Check top 10 chunks
-                    chunk_lower = chunk.lower()
-                    score = 0
-                    
-                    # Count keyword matches
-                    for keyword in keywords:
-                        if keyword in chunk_lower:
-                            score += 1
-                    
-                    # Check if any contact values appear in chunk
-                    contact_values = contact_info[contact_type]
-                    if isinstance(contact_values, list):
-                        for value in contact_values:
-                            if str(value).lower() in chunk_lower:
-                                score += 3  # Higher score for direct matches
-                                break
-                    elif isinstance(contact_values, dict):
-                        for value in contact_values.values():
-                            if str(value).lower() in chunk_lower:
-                                score += 3
-                                break
-                    else:
-                        if str(contact_values).lower() in chunk_lower:
-                            score += 3
-                    
-                    if score > 0:
-                        relevant_chunks.append({
-                            'chunk_index': i,
-                            'chunk_text': chunk,
-                            'relevance_score': score
-                        })
-                
-                # Sort by relevance score and take top 3
-                relevant_chunks.sort(key=lambda x: x['relevance_score'], reverse=True)
-                source_chunks[contact_type] = relevant_chunks[:3]
-            else:
+            values = contact_info.get(contact_type)
+            if not values:
                 source_chunks[contact_type] = []
+                continue
+
+            bm25_results: List[ChunkSearchResult] = []
+            if chunk_searcher:
+                if isinstance(values, list):
+                    query = " ".join(str(value) for value in values if value)
+                elif isinstance(values, dict):
+                    query = " ".join(str(value) for value in values.values() if value)
+                else:
+                    query = str(values)
+
+                bm25_results = chunk_searcher.search(query, top_k=3) if query else []
+
+            if bm25_results:
+                source_chunks[contact_type] = [
+                    {
+                        'chunk_index': result.index,
+                        'chunk_text': result.text,
+                        'relevance_score': round(result.score, 4)
+                    }
+                    for result in bm25_results
+                ]
+                continue
+
+            relevant_chunks = []
+            for i, chunk in enumerate(chunks[:10]):
+                chunk_lower = chunk.lower()
+                score = 0
+
+                for keyword in keywords:
+                    if keyword in chunk_lower:
+                        score += 1
+
+                if isinstance(values, list):
+                    for value in values:
+                        if str(value).lower() in chunk_lower:
+                            score += 3
+                            break
+                elif isinstance(values, dict):
+                    for value in values.values():
+                        if str(value).lower() in chunk_lower:
+                            score += 3
+                            break
+                else:
+                    if str(values).lower() in chunk_lower:
+                        score += 3
+
+                if score > 0:
+                    relevant_chunks.append({
+                        'chunk_index': i,
+                        'chunk_text': chunk,
+                        'relevance_score': score
+                    })
+
+            relevant_chunks.sort(key=lambda x: x['relevance_score'], reverse=True)
+            source_chunks[contact_type] = relevant_chunks[:3]
         
         return source_chunks
     
@@ -297,21 +379,14 @@ Return only valid JSON, no other text:"""
         """Fallback parser for LLM responses that aren't valid JSON"""
         try:
             # Initialize with defaults
-            result = {
-                "industry": "Unable to determine",
-                "company_size": "Unable to determine",
-                "location": "Not found", 
-                "usp": "Unable to extract",
-                "products_services": "Unable to extract",
-                "target_audience": "Unable to determine",
-                "sentiment": "neutral"
-            }
+            result = self._default_insight_values().copy()
             
             # Try to extract information using regex patterns
             import re
             
             # Look for key-value patterns
             patterns = {
+                'summary': r'(?:summary|overall|overview)[\s:]+([^\n\r]{1,350})',
                 'industry': r'(?:industry|sector)[\s:]+([^\n\r]{1,200})',
                 'company_size': r'(?:company.size|size)[\s:]+([^\n\r]{1,100})',
                 'location': r'(?:location|headquarters)[\s:]+([^\n\r]{1,100})',
@@ -336,42 +411,35 @@ Return only valid JSON, no other text:"""
             
         except Exception as e:
             print(f"[API] Fallback parsing error: {str(e)}")
-            return {
-                "industry": "Unable to determine",
-                "company_size": "Unable to determine",
-                "location": "Not found",
-                "usp": "Unable to extract",
-                "products_services": "Unable to extract", 
-                "target_audience": "Unable to determine",
-                "sentiment": "neutral",
-                "error": f"Parsing failed: {str(e)}"
-            }
+            error_result = self._default_insight_values().copy()
+            error_result["error"] = f"Parsing failed: {str(e)}"
+            return error_result
     
-    def _answer_custom_questions(self, context: str, questions: List[str], chunks: Optional[List[str]] = None) -> Dict:
+    def _answer_custom_questions(
+        self,
+        context: str,
+        questions: List[str],
+        chunks: Optional[List[str]] = None,
+        chunk_searcher: Optional[ChunkSearcher] = None
+    ) -> Dict:
         """Answer custom user questions using LangChain with RAG approach"""
         
-        answers = {}
-        source_chunks = {}
-        
-        # Use chunks if available for better context retrieval
+        answers: Dict[str, str] = {}
+        source_chunks: Dict[str, List[Dict[str, Any]]] = {}
+
         available_chunks = chunks or []
+        searcher = chunk_searcher or (ChunkSearcher(available_chunks) if available_chunks else None)
         
         for question in questions[:5]:  # Limit to 5 questions
             try:
-                # If we have chunks, find the most relevant ones
                 relevant_context = context
-                relevant_chunk_indices = []
-                if available_chunks:
-                    relevant_chunks = self._find_relevant_chunks(question, available_chunks)
-                    if relevant_chunks:
-                        relevant_context = "\n\n".join(relevant_chunks[:3])  # Use top 3 chunks
-                        # Track which chunk indices were used
-                        for chunk in relevant_chunks[:3]:
-                            for i, orig_chunk in enumerate(available_chunks):
-                                if chunk == orig_chunk:
-                                    relevant_chunk_indices.append(i)
-                                    break
-                        print(f"[API] Using {len(relevant_chunks)} relevant chunks for question: {question[:50]}...")
+                relevant_results: List[ChunkSearchResult] = []
+
+                if searcher:
+                    relevant_results = searcher.search(question, top_k=3)
+                    if relevant_results:
+                        relevant_context = "\n\n".join(result.text for result in relevant_results)
+                        print(f"[API] Using {len(relevant_results)} BM25 chunks for question: {question[:50]}...")
                 
                 # Create prompt for Q&A with retrieved context
                 qa_prompt = ChatPromptTemplate.from_messages([
@@ -396,14 +464,14 @@ Answer:""")
                 answers[question] = answer_text
                 
                 # Track source chunks for this question
-                if relevant_chunk_indices:
+                if relevant_results:
                     source_chunks[question] = [
                         {
-                            'chunk_index': idx,
-                            'chunk_text': available_chunks[idx],
-                            'relevance_score': 1  # Simple score since we already filtered relevant chunks
+                            'chunk_index': result.index,
+                            'chunk_text': available_chunks[result.index] if 0 <= result.index < len(available_chunks) else result.text,
+                            'relevance_score': round(result.score, 4) if result.score else 1.0
                         }
-                        for idx in relevant_chunk_indices[:3]  # Top 3 chunks
+                        for result in relevant_results
                     ]
                 else:
                     source_chunks[question] = []
@@ -417,35 +485,6 @@ Answer:""")
             'source_chunks': source_chunks
         }
     
-    def _find_relevant_chunks(self, question: str, chunks: List[str]) -> List[str]:
-        """Find chunks most relevant to the question using simple keyword matching"""
-        question_lower = question.lower()
-        question_words = set(re.findall(r'\b\w+\b', question_lower))
-        
-        # Remove common stop words
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'what', 'when', 'where', 'why', 'how', 'who', 'which'}
-        question_words = question_words - stop_words
-        
-        chunk_scores = []
-        for chunk in chunks:
-            chunk_lower = chunk.lower()
-            score = 0
-            
-            # Count keyword matches
-            for word in question_words:
-                if word in chunk_lower:
-                    score += 1
-            
-            # Boost score for exact phrase matches
-            if question_lower in chunk_lower:
-                score += 10
-                
-            chunk_scores.append((chunk, score))
-        
-        # Sort by score and return top chunks
-        chunk_scores.sort(key=lambda x: x[1], reverse=True)
-        return [chunk for chunk, score in chunk_scores if score > 0][:5]  # Return top 5 relevant chunks
-
     # ------------------------------------------------------------------
     # Groq Compound integrations
     # ------------------------------------------------------------------

@@ -19,6 +19,8 @@ interface Message {
 
 interface ChatInterfaceProps {
   url: string
+  expanded?: boolean
+  onFocusChange?: (active: boolean) => void
 }
 
 // Component for rendering markdown messages with sanitization
@@ -148,7 +150,7 @@ function MarkdownMessage({ content, isUser }: { content: string; isUser: boolean
   )
 }
 
-export function ChatInterface({ url }: ChatInterfaceProps) {
+export function ChatInterface({ url, expanded = false, onFocusChange }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -157,14 +159,14 @@ export function ChatInterface({ url }: ChatInterfaceProps) {
   ])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    scrollToBottom()
+    const container = messagesContainerRef.current
+    if (!container) return
+
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" })
   }, [messages])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -209,16 +211,36 @@ export function ChatInterface({ url }: ChatInterfaceProps) {
     } finally {
       setIsLoading(false)
     }
+
+    // Return focus to the input so the chat stays expanded
+    const inputEl = inputRef.current
+    if (inputEl) {
+      try {
+        inputEl.focus({ preventScroll: true })
+      } catch {
+        inputEl.focus()
+      }
+    }
   }
 
+  const handleInputFocus = () => {
+    onFocusChange?.(true)
+  }
+
+  const handleInputBlur = () => {
+    onFocusChange?.(false)
+  }
+
+  const containerHeightClass = expanded ? "h-[75vh] max-h-[820px]" : "h-[600px]"
+
   return (
-    <Card className="flex flex-col h-[600px] shadow-xl border-gray-200">
+    <Card className={`flex flex-col ${containerHeightClass} shadow-xl border-gray-200 transition-all duration-200`}>
       <div className="p-5 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-blue-50">
         <h3 className="font-bold text-lg bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">Ask Follow-up Questions</h3>
         <p className="text-sm text-gray-600 mt-1">Chat with AI about the website insights</p>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-gray-50">
+  <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-5 space-y-4 bg-gray-50">
         {messages.map((message, index) => (
           <div key={index} className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}>
             {message.role === "assistant" && (
@@ -272,17 +294,18 @@ export function ChatInterface({ url }: ChatInterfaceProps) {
             </div>
           </div>
         )}
-
-        <div ref={messagesEndRef} />
       </div>
 
       <form onSubmit={handleSubmit} className="p-4 border-t border-gray-200 bg-white">
         <div className="flex gap-2">
           <Input
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask a question about the website..."
             disabled={isLoading}
+            onFocus={handleInputFocus}
+            onBlur={handleInputBlur}
             className="flex-1 border-gray-300 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
           />
           <Button 

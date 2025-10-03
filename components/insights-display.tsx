@@ -1,12 +1,13 @@
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Building2, Users, MapPin, Target, Package, Mail, Phone, HelpCircle, ChevronDown, ChevronRight } from "lucide-react"
+import { Building2, Users, MapPin, Target, Package, Mail, Phone, HelpCircle, ChevronDown, ChevronRight, Sparkles } from "lucide-react"
 import ReactMarkdown from 'react-markdown'
 import DOMPurify from 'dompurify'
 import { useState } from 'react'
 
 interface InsightsDisplayProps {
   insights: {
+    summary?: string
     industry?: string
     company_size?: string
     location?: string
@@ -83,6 +84,48 @@ export function InsightsDisplay({ insights, url }: InsightsDisplayProps) {
         </div>
         <Badge className="bg-gradient-to-r from-purple-600 to-blue-600 text-white border-0 px-4 py-1.5">{insights.sentiment || "Analyzed"}</Badge>
       </div>
+
+      {insights.summary && (
+        <Card className="p-6 border-l-4 border-l-blue-600 hover:shadow-lg transition-shadow bg-gradient-to-r from-blue-50 to-transparent">
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 shadow-md">
+                <Sparkles className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">AI Summary</h3>
+                <p className="text-gray-900 leading-relaxed mt-2">{insights.summary}</p>
+              </div>
+            </div>
+            {insights.source_chunks && insights.source_chunks.summary && insights.source_chunks.summary.length > 0 && (
+              <button
+                onClick={() => togglePanel('summary')}
+                className="ml-2 p-1 hover:bg-gray-100 rounded transition-colors flex items-center gap-1 text-xs text-gray-500"
+              >
+                {expandedPanels.has('summary') ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                Sources
+              </button>
+            )}
+          </div>
+
+          {expandedPanels.has('summary') && insights.source_chunks && insights.source_chunks.summary && (
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <p className="text-xs font-medium text-gray-600 mb-2">Source Documents:</p>
+              <div className="space-y-2">
+                {insights.source_chunks.summary.map((chunk, chunkIndex) => (
+                  <div key={chunkIndex} className="bg-gray-50 p-3 rounded text-xs text-gray-700 border-l-2 border-blue-200">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium text-gray-600">Chunk {chunk.chunk_index + 1}</span>
+                      <Badge variant="outline" className="text-xs">Relevance: {chunk.relevance_score}</Badge>
+                    </div>
+                    <p className="text-gray-700 leading-relaxed">{chunk.chunk_text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       {insights.custom_answers && Object.keys(insights.custom_answers).length > 0 && (
         <Card className="p-6 hover:shadow-lg transition-shadow border-gray-200">

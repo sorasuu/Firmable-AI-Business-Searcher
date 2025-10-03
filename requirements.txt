@@ -12,3 +12,4 @@ requests
 beautifulsoup4
 html2text
 lxml
+rank-bm25

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
@@ -24,6 +24,8 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   const [results, setResults] = useState<any>(null)
   const [multiPage, setMultiPage] = useState(true)
   const [questions, setQuestions] = useState<string[]>([""])
+  const [isChatActive, setIsChatActive] = useState(false)
+  const focusScrollRef = useRef<number | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -55,7 +57,27 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
     setResults(null)
     setError(null)
     setQuestions([""])
+    setIsChatActive(false)
     onResultsChange?.(false)
+  }
+
+  const handleChatFocusChange = (active: boolean) => {
+    setIsChatActive(active)
+
+    if (typeof window === "undefined") {
+      return
+    }
+
+    if (active) {
+      focusScrollRef.current = window.scrollY
+      requestAnimationFrame(() => {
+        if (focusScrollRef.current !== null) {
+          window.scrollTo({ top: focusScrollRef.current, left: 0, behavior: "auto" })
+        }
+      })
+    } else {
+      focusScrollRef.current = null
+    }
   }
 
   const handleQuestionChange = (index: number, value: string) => {
@@ -100,9 +122,35 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <InsightsDisplay insights={results.insights} url={results.url} />
-          <ChatInterface url={results.url} />
+        <div
+          className={`${
+            isChatActive
+              ? "flex flex-col gap-6"
+              : "flex flex-col lg:flex-row gap-6"
+          }`}
+        >
+          <div
+            className={`${
+              isChatActive
+                ? "order-2"
+                : "lg:w-1/2"
+            } flex-1`}
+          >
+            <InsightsDisplay insights={results.insights} url={results.url} />
+          </div>
+          <div
+            className={`${
+              isChatActive
+                ? "order-1"
+                : "lg:w-1/2"
+            } flex-1`}
+          >
+            <ChatInterface
+              url={results.url}
+              expanded={isChatActive}
+              onFocusChange={handleChatFocusChange}
+            />
+          </div>
         </div>
       </div>
     )
