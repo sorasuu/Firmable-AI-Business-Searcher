@@ -22,7 +22,7 @@ export default function Home() {
                 Extract <span className="bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">key insights</span> from any website in seconds
               </h1>
               <p className="text-xl text-gray-600 text-balance max-w-3xl mx-auto leading-relaxed">
-                Firmable AI Searcher Proto combines the most accurate B2B data with AI agents to help you find, prioritize, and convert the right buyers faster.
+                Firmable AI Searcher  combines the most accurate B2B data with AI agents to help you find, prioritize, and convert the right buyers faster.
               </p>
             </div>
           )}
