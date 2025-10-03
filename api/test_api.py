@@ -1,353 +1,203 @@
-"""
-Comprehensive test cases for the Website Insights API.
-Tests cover authentication, rate limiting, validation, and core functionality.
-"""
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import Mock, patch
-import os
-import sys
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from api.dependencies import get_analysis_orchestrator, get_chat_agent
+from api.index import SECRET_KEY, app
 
-from api.index import app, SECRET_KEY
 
-# Test client
-client = TestClient(app)
-
-# Test constants
 TEST_URL = "https://example.com"
-VALID_AUTH_HEADER = {"Authorization": f"Bearer {SECRET_KEY}"}
-INVALID_AUTH_HEADER = {"Authorization": "Bearer invalid-token"}
 
 
-class TestAuthentication:
-    """Test authentication and authorization."""
-    
-    def test_missing_auth_header(self):
-        """Test request without authorization header returns 401."""
-        response = client.post(
-            "/api/analyze",
-            json={"url": TEST_URL}
-        )
-        assert response.status_code == 401
-        assert "Authorization header missing" in response.json()["detail"]
-    
-    def test_invalid_auth_format(self):
-        """Test invalid authorization format returns 401."""
-        response = client.post(
-            "/api/analyze",
-            json={"url": TEST_URL},
-            headers={"Authorization": "InvalidFormat token"}
-        )
-        assert response.status_code == 401
-        assert "Invalid authorization format" in response.json()["detail"]
-    
-    def test_invalid_token(self):
-        """Test invalid token returns 401."""
-        response = client.post(
-            "/api/analyze",
-            json={"url": TEST_URL},
-            headers=INVALID_AUTH_HEADER
-        )
-        assert response.status_code == 401
-        assert "Invalid authorization token" in response.json()["detail"]
-    
-    def test_valid_auth(self):
-        """Test valid authentication allows request processing."""
-        with patch('api.scraper.WebsiteScraper.scrape_website') as mock_scrape, \
-             patch('api.analyzer.AIAnalyzer.analyze_website') as mock_analyze:
-            
-            mock_scrape.return_value = {"content": "test"}
-            mock_analyze.return_value = {"industry": "Tech"}
-            
-            response = client.post(
-                "/api/analyze",
-                json={"url": TEST_URL},
-                headers=VALID_AUTH_HEADER
-            )
-            assert response.status_code in [200, 500]  # 500 if dependencies not available
+class StubChatAgent:
+    def __init__(self) -> None:
+        self.chat_calls = []
+        self.response = "Stub chat response"
+        self.raise_exc = False
+
+    def cache_website_data(self, url, scraped_data, insights):
+        pass
+
+    def chat(self, url: str, query: str, conversation_history=None) -> str:
+        self.chat_calls.append({"url": url, "query": query, "history": conversation_history})
+        if self.raise_exc:
+            raise RuntimeError("chat unavailable")
+        return self.response
 
 
-class TestValidation:
-    """Test input validation with Pydantic."""
-    
-    def test_missing_url(self):
-        """Test missing URL returns validation error."""
-        response = client.post(
-            "/api/analyze",
-            json={},
-            headers=VALID_AUTH_HEADER
-        )
-        assert response.status_code == 422
-    
-    def test_invalid_url_format(self):
-        """Test invalid URL format returns validation error."""
-        response = client.post(
-            "/api/analyze",
-            json={"url": "not-a-valid-url"},
-            headers=VALID_AUTH_HEADER
-        )
-        assert response.status_code == 422
-    
-    def test_valid_url_with_https(self):
-        """Test valid HTTPS URL passes validation."""
-        with patch('api.scraper.WebsiteScraper.scrape_website') as mock_scrape, \
-             patch('api.analyzer.AIAnalyzer.analyze_website') as mock_analyze:
-            
-            mock_scrape.return_value = {"content": "test"}
-            mock_analyze.return_value = {"industry": "Tech"}
-            
-            response = client.post(
-                "/api/analyze",
-                json={"url": "https://example.com"},
-                headers=VALID_AUTH_HEADER
-            )
-            assert response.status_code in [200, 500]
-    
-    def test_optional_questions_field(self):
-        """Test questions field is optional."""
-        with patch('api.scraper.WebsiteScraper.scrape_website') as mock_scrape, \
-             patch('api.analyzer.AIAnalyzer.analyze_website') as mock_analyze:
-            
-            mock_scrape.return_value = {"content": "test"}
-            mock_analyze.return_value = {"industry": "Tech"}
-            
-            response = client.post(
-                "/api/analyze",
-                json={"url": TEST_URL, "questions": ["What industry?"]},
-                headers=VALID_AUTH_HEADER
-            )
-            assert response.status_code in [200, 500]
+class StubOrchestrator:
+    def __init__(self, chat_agent: StubChatAgent) -> None:
+        self.chat_agent = chat_agent
+        self.calls = []
+        self.raise_exc = False
 
+    def analyze(self, url: str, questions=None):
+        self.calls.append({"url": url, "questions": list(questions) if questions else None})
+        if self.raise_exc:
+            raise RuntimeError("analysis failure")
 
-class TestAnalyzeEndpoint:
-    """Test /api/analyze endpoint functionality."""
-    
-    @patch('api.scraper.WebsiteScraper.scrape_website')
-    @patch('api.analyzer.AIAnalyzer.analyze_website')
-    @patch('api.chat.ConversationalAgent.cache_website_data')
-    def test_successful_analysis(self, mock_cache, mock_analyze, mock_scrape):
-        """Test successful website analysis returns expected structure."""
-        # Mock responses
-        mock_scrape.return_value = {
-            "url": TEST_URL,
-            "content": "Test content",
-            "title": "Test Company"
-        }
-        
-        mock_analyze.return_value = {
+        insights = {
             "industry": "Technology",
-            "company_size": "Medium",
-            "location": "San Francisco",
-            "usp": "AI-powered solutions",
-            "products_services": "Software development",
-            "target_audience": "Businesses",
-            "sentiment": "Positive"
+            "company_size": "Mid-market",
+            "contact_info": {
+                "emails": ["info@example.com"],
+                "phones": ["+1 555 0100"],
+                "addresses": ["123 Example Street"],
+                "social_media": {"linkedin": ["https://linkedin.com/company/example"]},
+            },
         }
-        
-        response = client.post(
-            "/api/analyze",
-            json={"url": TEST_URL},
-            headers=VALID_AUTH_HEADER
-        )
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "url" in data
-        assert "insights" in data
-        assert "timestamp" in data
-        assert data["url"] == TEST_URL
-        assert data["insights"]["industry"] == "Technology"
-    
-    @patch('api.scraper.WebsiteScraper.scrape_website')
-    @patch('api.chat.ConversationalAgent.answer_question_with_sources')
-    @patch('api.analyzer.AIAnalyzer.analyze_website')
-    def test_analysis_with_custom_questions(self, mock_analyze, mock_answer_question, mock_scrape):
-        """Test analysis with custom questions."""
-        mock_scrape.return_value = {"content": "test"}
-        mock_analyze.return_value = {
-            "industry": "Tech",
-            "custom_answers": {
-                "pricing": "Subscription-based"
-            }
-        }
-        mock_answer_question.return_value = {
-            "answer": "Pricing is subscription-based",
-            "source_chunks": [
-                {"chunk_index": 0, "chunk_text": "Pricing details", "relevance_score": 0.9}
-            ]
-        }
-        
-        response = client.post(
-            "/api/analyze",
-            json={
-                "url": TEST_URL,
-                "questions": ["What is the pricing model?"]
-            },
-            headers=VALID_AUTH_HEADER
-        )
-        
-        assert response.status_code == 200
-        # Verify that analyze_website was called with questions
-        assert mock_analyze.called
-        mock_answer_question.assert_called()
-    
-    @patch('api.scraper.WebsiteScraper.scrape_website')
-    def test_scraping_failure(self, mock_scrape):
-        """Test handling of scraping failures."""
-        mock_scrape.side_effect = Exception("Failed to fetch website")
-        
-        response = client.post(
-            "/api/analyze",
-            json={"url": TEST_URL},
-            headers=VALID_AUTH_HEADER
-        )
-        
-        assert response.status_code == 500
-        assert "Analysis failed" in response.json()["detail"]
+
+        if questions:
+            insights["custom_answers"] = {question: f"Stub answer: {question}" for question in questions}
+
+        return insights
 
 
-class TestChatEndpoint:
-    """Test /api/chat endpoint functionality."""
-    
-    @patch('api.chat.ConversationalAgent.chat')
-    def test_successful_chat(self, mock_chat):
-        """Test successful chat interaction."""
-        mock_chat.return_value = "The company is in the Technology sector."
-        
-        response = client.post(
-            "/api/chat",
-            json={
-                "url": TEST_URL,
-                "query": "What industry is the company in?"
-            },
-            headers=VALID_AUTH_HEADER
-        )
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "url" in data
-        assert "query" in data
-        assert "response" in data
-        assert "timestamp" in data
-        assert data["response"] == "The company is in the Technology sector."
-    
-    @patch('api.chat.ConversationalAgent.chat')
-    def test_chat_with_conversation_history(self, mock_chat):
-        """Test chat with conversation history."""
-        mock_chat.return_value = "Based on our previous discussion..."
-        
-        conversation_history = [
-            {"role": "user", "content": "What do they sell?"},
-            {"role": "assistant", "content": "They sell software."}
-        ]
-        
-        response = client.post(
-            "/api/chat",
-            json={
-                "url": TEST_URL,
-                "query": "Tell me more",
-                "conversation_history": conversation_history
-            },
-            headers=VALID_AUTH_HEADER
-        )
-        
-        assert response.status_code == 200
-        assert mock_chat.called
-        # Verify conversation_history was passed
-        call_kwargs = mock_chat.call_args[1]
-        assert call_kwargs["conversation_history"] == conversation_history
-    
-    @patch('api.chat.ConversationalAgent.chat')
-    def test_chat_failure(self, mock_chat):
-        """Test handling of chat failures."""
-        mock_chat.side_effect = Exception("AI service unavailable")
-        
-        response = client.post(
-            "/api/chat",
-            json={
-                "url": TEST_URL,
-                "query": "What industry?"
-            },
-            headers=VALID_AUTH_HEADER
-        )
-        
-        assert response.status_code == 500
+@pytest.fixture
+def stub_services():
+    chat_agent = StubChatAgent()
+    orchestrator = StubOrchestrator(chat_agent)
+    app.dependency_overrides[get_analysis_orchestrator] = lambda: orchestrator
+    app.dependency_overrides[get_chat_agent] = lambda: chat_agent
+    yield {"orchestrator": orchestrator, "chat_agent": chat_agent}
+    app.dependency_overrides.clear()
 
 
-class TestHealthEndpoints:
-    """Test health check endpoints."""
-    
-    def test_health_endpoint(self):
-        """Test /api/health endpoint."""
-        response = client.get("/api/health")
-        assert response.status_code == 200
-        assert response.json() == {"status": "healthy"}
-    
-    def test_root_health_endpoint(self):
-        """Test /health endpoint."""
-        response = client.get("/health")
-        assert response.status_code == 200
-        assert response.json() == {"status": "healthy"}
-    
-    def test_root_endpoint(self):
-        """Test root endpoint returns API information."""
-        response = client.get("/")
-        assert response.status_code == 200
-        data = response.json()
-        assert "message" in data
-        assert "endpoints" in data
-        assert "/api/analyze" in str(data["endpoints"])
+@pytest.fixture
+def client(stub_services):
+    with TestClient(app) as test_client:
+        yield test_client
 
 
-class TestRateLimiting:
-    """Test rate limiting functionality."""
-    
-    def test_analyze_rate_limit(self):
-        """Test rate limiting on analyze endpoint (10/minute)."""
-        # This test would need to make 11+ requests rapidly
-        # In practice, you'd use a separate test with time mocking
-        pass  # Placeholder - implement with time mocking if needed
-    
-    def test_chat_rate_limit(self):
-        """Test rate limiting on chat endpoint (20/minute)."""
-        # This test would need to make 21+ requests rapidly
-        pass  # Placeholder - implement with time mocking if needed
+@pytest.fixture
+def auth_header():
+    return {"Authorization": f"Bearer {SECRET_KEY}"}
 
 
-class TestErrorHandling:
-    """Test error handling and edge cases."""
-    
-    def test_malformed_json(self):
-        """Test handling of malformed JSON."""
-        response = client.post(
-            "/api/analyze",
-            data="not json",
-            headers={
-                **VALID_AUTH_HEADER,
-                "Content-Type": "application/json"
-            }
-        )
-        assert response.status_code in [400, 422]
-    
-    @patch('api.scraper.WebsiteScraper.scrape_website')
-    def test_empty_scrape_result(self, mock_scrape):
-        """Test handling of empty scrape results."""
-        mock_scrape.return_value = {}
-        
-        response = client.post(
-            "/api/analyze",
-            json={"url": TEST_URL},
-            headers=VALID_AUTH_HEADER
-        )
-        
-        # Should handle gracefully
-        assert response.status_code in [200, 500]
+def test_analyze_requires_authentication(client):
+    response = client.post("/api/analyze", json={"url": TEST_URL})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authorization header missing"
 
 
-# Run tests with: pytest api/test_api.py -v
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"])
+def test_analyze_rejects_invalid_token(client):
+    response = client.post(
+        "/api/analyze",
+        json={"url": TEST_URL},
+        headers={"Authorization": "Bearer wrong"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid authorization token"
+
+
+def test_analyze_returns_insights(client, auth_header, stub_services):
+    response = client.post("/api/analyze", json={"url": TEST_URL}, headers=auth_header)
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["url"].rstrip("/") == TEST_URL.rstrip("/")
+    assert payload["insights"]["industry"] == "Technology"
+    assert payload["insights"]["contact_info"]["emails"] == ["info@example.com"]
+    datetime.fromisoformat(payload["timestamp"])
+    assert stub_services["orchestrator"].calls[-1]["questions"] is None
+
+
+def test_analyze_with_questions_enriches_response(client, auth_header, stub_services):
+    questions = ["What is the pricing model?"]
+    response = client.post(
+        "/api/analyze",
+        json={"url": TEST_URL, "questions": questions},
+        headers=auth_header,
+    )
+
+    assert response.status_code == 200
+    insights = response.json()["insights"]
+    assert insights["custom_answers"][questions[0]] == f"Stub answer: {questions[0]}"
+    assert stub_services["orchestrator"].calls[-1]["questions"] == questions
+
+
+def test_analyze_invalid_url_returns_422(client, auth_header):
+    response = client.post(
+        "/api/analyze",
+        json={"url": "invalid-url"},
+        headers=auth_header,
+    )
+    assert response.status_code == 422
+
+
+def test_analyze_internal_error_returns_500(client, auth_header, stub_services):
+    stub_services["orchestrator"].raise_exc = True
+    response = client.post("/api/analyze", json={"url": TEST_URL}, headers=auth_header)
+    assert response.status_code == 500
+    assert "Analysis failed" in response.json()["detail"]
+
+
+def test_chat_requires_authentication(client):
+    response = client.post("/api/chat", json={"url": TEST_URL, "query": "hi"})
+    assert response.status_code == 401
+
+
+def test_chat_returns_agent_response(client, auth_header, stub_services):
+    stub_services["chat_agent"].response = "Company operates in technology"
+    response = client.post(
+        "/api/chat",
+        json={"url": TEST_URL, "query": "What industry?"},
+        headers=auth_header,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response"] == "Company operates in technology"
+    assert stub_services["chat_agent"].chat_calls[-1]["url"].rstrip("/") == TEST_URL.rstrip("/")
+
+
+def test_chat_passes_conversation_history(client, auth_header, stub_services):
+    history = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
+    client.post(
+        "/api/chat",
+        json={"url": TEST_URL, "query": "follow up", "conversation_history": history},
+        headers=auth_header,
+    )
+    call = stub_services["chat_agent"].chat_calls[-1]
+    assert call["history"] == history
+
+
+def test_chat_validation_error(client, auth_header):
+    response = client.post(
+        "/api/chat",
+        json={"url": TEST_URL},
+        headers=auth_header,
+    )
+    assert response.status_code == 422
+
+
+def test_chat_internal_error_returns_500(client, auth_header, stub_services):
+    stub_services["chat_agent"].raise_exc = True
+    response = client.post(
+        "/api/chat",
+        json={"url": TEST_URL, "query": "hello"},
+        headers=auth_header,
+    )
+    assert response.status_code == 500
+
+
+def test_health_endpoints(client):
+    assert client.get("/api/health").json() == {"status": "healthy"}
+    assert client.get("/health").json() == {"status": "healthy"}
+    root = client.get("/").json()
+    assert root["endpoints"]["analyze"] == "/api/analyze"
+    assert root["endpoints"]["chat"] == "/api/chat"
+
+
+def test_rate_limit_exceeded_returns_429(client, auth_header, stub_services):
+    app.state.limiter.reset()
+    headers = {**auth_header, "X-Forwarded-For": "198.51.100.77"}
+
+    response = None
+    for attempt in range(11):
+        response = client.post("/api/analyze", json={"url": TEST_URL}, headers=headers)
+        if attempt < 10:
+            assert response.status_code == 200
+
+    assert response is not None
+    assert response.status_code == 429

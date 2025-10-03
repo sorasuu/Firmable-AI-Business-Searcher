@@ -54,21 +54,6 @@ interface BusinessIntelligence {
   recommended_actions?: string[]
 }
 
-interface ReportRequest {
-  url: string
-  conversation_history?: Array<{ role: string; content: string }>
-}
-
-interface ReportResponse {
-  url: string
-  report: {
-    insight_updates?: Record<string, string>
-    business_intelligence?: BusinessIntelligence
-  }
-  insights: AnalysisResponse["insights"]
-  timestamp: string
-}
-
 const API_BASE_URL = (() => {
   // if (process.env.VERCEL_URL) {
   //   return `https://${process.env.VERCEL_URL}`
@@ -258,65 +243,6 @@ export async function chatAboutWebsiteAction(data: ChatRequest): Promise<ChatRes
     }
 
     console.log("[v0] Chat successful")
-    return result
-  } catch (error) {
-    console.error("[v0] Fetch error:", error)
-    throw error
-  }
-}
-
-export async function generateBusinessReportAction(data: ReportRequest): Promise<ReportResponse> {
-  if (!API_SECRET_KEY) {
-    throw new Error("API_SECRET_KEY is not configured. Please add it to your .env.local file")
-  }
-
-  console.log("[v0] Generating business report for:", data.url)
-  console.log("[v0] API URL:", API_BASE_URL)
-
-  const healthCheck = await checkBackendHealth()
-  if (!healthCheck.healthy) {
-    throw new Error(
-      `Cannot connect to FastAPI backend at ${API_BASE_URL}\n\n` +
-        `Health check failed: ${healthCheck.error}\n\n` +
-        `Make sure the FastAPI backend is running on port 8000.`,
-    )
-  }
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/report`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${API_SECRET_KEY}`,
-      },
-      body: JSON.stringify(data),
-    })
-
-    console.log("[v0] Report response status:", response.status)
-
-    const responseText = await response.text()
-
-    if (!response.ok) {
-      let errorMessage = responseText
-      try {
-        const errorJson = JSON.parse(responseText)
-        errorMessage = errorJson.detail || errorJson.message || responseText
-      } catch {
-        errorMessage = responseText
-      }
-
-      console.error("[v0] Report generation error:", errorMessage)
-      throw new Error(errorMessage || `Failed to generate report (Status: ${response.status})`)
-    }
-
-    let result
-    try {
-      result = JSON.parse(responseText)
-    } catch {
-      throw new Error(`API returned invalid JSON response. Make sure the FastAPI backend is running properly.`)
-    }
-
-    console.log("[v0] Report generation successful")
     return result
   } catch (error) {
     console.error("[v0] Fetch error:", error)

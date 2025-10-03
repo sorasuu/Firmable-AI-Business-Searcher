@@ -1,72 +1,62 @@
-﻿from typing import Dict, Optional, List, Tuple, Any
+﻿from __future__ import annotations
+
+from typing import Dict, Optional, List, Tuple, Any
 import ast
 import os
 import re
 import json
 from collections import OrderedDict
+
 import requests
-from bs4 import BeautifulSoup
-import html2text
+from bs4 import BeautifulSoup  # type: ignore[import-not-found]
+import html2text  # type: ignore[import-not-found]
+from dotenv import load_dotenv
+
 try:
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env.local"))
+    from firecrawl.firecrawl import FirecrawlApp  # type: ignore[import-not-found]
 except ImportError:
-    pass
-try:
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env.local"))
-except ImportError:
-    pass
-try:
-    from firecrawl.firecrawl import FirecrawlApp
-    FIRECRAWL_AVAILABLE = True
-except ImportError:
-    try:
-        from firecrawl import FirecrawlApp
-        FIRECRAWL_AVAILABLE = True
-    except ImportError:
-        FIRECRAWL_AVAILABLE = False
-        FirecrawlApp = None
-from langchain_groq import ChatGroq
+    from firecrawl import FirecrawlApp  # type: ignore[import-not-found]
+
+from langchain_groq import ChatGroq  # type: ignore[import-not-found]
 from langchain.prompts import ChatPromptTemplate
 from urllib.parse import urlparse, urljoin
 
 
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env.local"))
+
+
 class WebsiteScraper:
     """Web scraper using Firecrawl API with BeautifulSoup fallback"""
-    
+
     def __init__(self, llm=None):
         # Initialize Firecrawl if available
         self.use_firecrawl = False
         self.app = None
-        
-        if FIRECRAWL_AVAILABLE:
-            firecrawl_api_key = os.environ.get("FIRECRAWL_API_KEY", "")
-            if firecrawl_api_key:
-                try:
-                    self.app = FirecrawlApp(api_key=firecrawl_api_key)
-                    self.use_firecrawl = True
-                    print("[SCRAPER] Firecrawl initialized successfully")
-                except Exception as e:
-                    print(f"[SCRAPER] Firecrawl initialization failed: {e}. Will use fallback scraper.")
-            else:
-                print("[SCRAPER] No FIRECRAWL_API_KEY found. Using fallback scraper.")
+
+        firecrawl_api_key = os.environ.get("FIRECRAWL_API_KEY", "")
+        if firecrawl_api_key:
+            try:
+                self.app = FirecrawlApp(api_key=firecrawl_api_key)
+                self.use_firecrawl = True
+                print("[SCRAPER] Firecrawl initialized successfully")
+            except Exception as e:
+                print(f"[SCRAPER] Firecrawl initialization failed: {e}. Will use fallback scraper.")
         else:
-            print("[SCRAPER] Firecrawl not available. Using fallback scraper.")
-        
+            print("[SCRAPER] No FIRECRAWL_API_KEY found. Using fallback scraper.")
+
         # Initialize BeautifulSoup fallback tools
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         self.html_converter = html2text.HTML2Text()
         self.html_converter.ignore_links = False
-        
+
         # Initialize cache
         self.cache_file = os.path.join(os.path.dirname(__file__), "scraper_cache.jsonl")
         self.cache = self._load_cache()
         self.html_converter.ignore_images = True
         self.html_converter.ignore_emphasis = False
-        
+
         # Initialize LLM for additional processing
         self.llm = llm or ChatGroq(
             model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b"),

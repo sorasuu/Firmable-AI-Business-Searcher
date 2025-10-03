@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card"
 import { Loader2, Search, AlertCircle, Plus, X, Sparkles } from "lucide-react"
 import { InsightsDisplay } from "./insights-display"
 import { ChatInterface } from "./chat-interface"
-import { analyzeWebsiteAction, generateBusinessReportAction } from "@/app/actions"
+import { analyzeWebsiteAction, chatAboutWebsiteAction } from "@/app/actions"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
 interface AnalyzerFormProps {
@@ -21,9 +21,7 @@ type ChatMessage = {
   content: string
 }
 
-type AnalyzerResult = Awaited<ReturnType<typeof analyzeWebsiteAction>> & {
-  report?: Awaited<ReturnType<typeof generateBusinessReportAction>>["report"]
-}
+type AnalyzerResult = Awaited<ReturnType<typeof analyzeWebsiteAction>>
 
 export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   const [url, setUrl] = useState("")
@@ -89,36 +87,44 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
     setReportSuccessMessage(null)
 
     try {
+      // Use chat API to generate business intelligence report
+      const reportQuery = "Generate a comprehensive business intelligence report based on our conversation and the website analysis. Include executive summary, key opportunities, risks, and recommended actions."
+      
       const limitedHistory = chatTranscript.slice(-20).map((message) => ({
         role: message.role,
         content: message.content,
       }))
 
-      const reportResponse = await generateBusinessReportAction({
+      const chatResponse = await chatAboutWebsiteAction({
         url: results.url,
+        query: reportQuery,
         conversation_history: limitedHistory,
       })
 
+      // Update results with the business intelligence response
       setResults((prev) => {
-        if (!prev) {
-          return {
-            url: reportResponse.url,
-            insights: reportResponse.insights,
-            timestamp: reportResponse.timestamp ?? new Date().toISOString(),
-            report: reportResponse.report,
-          }
-        }
+        if (!prev) return prev
 
         return {
           ...prev,
-          url: reportResponse.url,
-          insights: reportResponse.insights,
-          report: reportResponse.report,
-          timestamp: reportResponse.timestamp ?? prev.timestamp,
+          insights: {
+            ...prev.insights,
+            business_intel: {
+              conversation_summary: chatResponse.response,
+              executive_summary: chatResponse.response,
+            }
+          }
         }
       })
 
-      setReportSuccessMessage("Business intelligence updated with the latest chat insights.")
+      // Add to chat transcript
+      setChatTranscript((prev) => [
+        ...prev,
+        { role: "user", content: reportQuery },
+        { role: "assistant", content: chatResponse.response }
+      ])
+
+      setReportSuccessMessage("Business intelligence report generated successfully through chat.")
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to generate report"
       setReportError(message)
@@ -196,7 +202,7 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
               {isGeneratingReport ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Updating Report
+                  Generating Report
                 </>
               ) : (
                 <>
