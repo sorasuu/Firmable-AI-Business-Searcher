@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Any
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlunparse
 from langchain_groq import ChatGroq
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
@@ -485,7 +485,7 @@ Rules:
             'url': result.get('url', target_url),
             'content': content,
             'query': query,
-            'timestamp': datetime.now(datetime.timezone.utc).isoformat() + 'Z',
+            'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             'executed_tools': result.get('executed_tools'),
             'error': result.get('error'),
         }
