@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -20,7 +21,9 @@ async def chat_about_website(
     chat_agent: ConversationalAgent = Depends(get_chat_agent),
 ) -> ConversationResponse:
     try:
-        response_text = chat_agent.chat(
+        # Offload blocking operations to thread pool to prevent event loop blocking
+        response_text = await asyncio.to_thread(
+            chat_agent.chat,
             url=str(payload.url),
             query=payload.query,
             conversation_history=payload.conversation_history,

@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import ReactMarkdown, { type Components } from "react-markdown"
+import remarkGfm from "remark-gfm"
 import DOMPurify from "dompurify"
 
 type SourceChunk = {
@@ -101,23 +102,43 @@ const mergeClassNames = (...classes: Array<string | undefined | null | false>) =
   classes.filter(Boolean).join(" ")
 
 const markdownComponents: Components = {
+  h1: ({ className, children, ...rest }) => (
+    <h1 {...rest} className={mergeClassNames(className, "text-2xl font-bold text-gray-900 mb-3 mt-4 first:mt-0")}>
+      {children}
+    </h1>
+  ),
+  h2: ({ className, children, ...rest }) => (
+    <h2 {...rest} className={mergeClassNames(className, "text-xl font-bold text-gray-900 mb-2 mt-4 first:mt-0 border-b border-gray-200 pb-1")}>
+      {children}
+    </h2>
+  ),
+  h3: ({ className, children, ...rest }) => (
+    <h3 {...rest} className={mergeClassNames(className, "text-lg font-semibold text-gray-900 mb-2 mt-3 first:mt-0")}>
+      {children}
+    </h3>
+  ),
+  h4: ({ className, children, ...rest }) => (
+    <h4 {...rest} className={mergeClassNames(className, "text-base font-semibold text-gray-800 mb-1.5 mt-2 first:mt-0")}>
+      {children}
+    </h4>
+  ),
   p: ({ className, children, ...rest }) => (
-    <p {...rest} className={mergeClassNames(className, "mb-2 last:mb-0")}>
+    <p {...rest} className={mergeClassNames(className, "mb-3 last:mb-0 leading-relaxed text-gray-800")}>
       {children}
     </p>
   ),
   ul: ({ className, children, ...rest }) => (
-    <ul {...rest} className={mergeClassNames(className, "list-disc list-inside mb-2 space-y-1")}>
+    <ul {...rest} className={mergeClassNames(className, "list-disc list-outside ml-5 mb-3 space-y-1.5")}>
       {children}
     </ul>
   ),
   ol: ({ className, children, ...rest }) => (
-    <ol {...rest} className={mergeClassNames(className, "list-decimal list-inside mb-2 space-y-1")}>
+    <ol {...rest} className={mergeClassNames(className, "list-decimal list-outside ml-5 mb-3 space-y-1.5")}>
       {children}
     </ol>
   ),
   li: ({ className, children, ...rest }) => (
-    <li {...rest} className={mergeClassNames(className, "text-gray-700")}>
+    <li {...rest} className={mergeClassNames(className, "text-gray-700 leading-relaxed pl-1")}>
       {children}
     </li>
   ),
@@ -134,7 +155,7 @@ const markdownComponents: Components = {
   code: ({ className, children, ...rest }) => (
     <code
       {...rest}
-      className={mergeClassNames(className, "bg-gray-100 px-1 py-0.5 rounded text-xs font-mono text-gray-800")}
+      className={mergeClassNames(className, "bg-gray-100 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800 border border-gray-200")}
     >
       {children}
     </code>
@@ -142,10 +163,50 @@ const markdownComponents: Components = {
   pre: ({ className, children, ...rest }) => (
     <pre
       {...rest}
-      className={mergeClassNames(className, "bg-gray-100 p-2 rounded text-xs font-mono text-gray-800 overflow-x-auto")}
+      className={mergeClassNames(className, "bg-gray-50 p-3 rounded-lg text-xs font-mono text-gray-800 overflow-x-auto border border-gray-200 mb-3")}
     >
       {children}
     </pre>
+  ),
+  table: ({ className, children, ...rest }) => (
+    <div className="overflow-x-auto my-4">
+      <table {...rest} className={mergeClassNames(className, "min-w-full divide-y divide-gray-200 border border-gray-200 rounded-lg")}>
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ className, children, ...rest }) => (
+    <thead {...rest} className={mergeClassNames(className, "bg-gray-50")}>
+      {children}
+    </thead>
+  ),
+  tbody: ({ className, children, ...rest }) => (
+    <tbody {...rest} className={mergeClassNames(className, "bg-white divide-y divide-gray-200")}>
+      {children}
+    </tbody>
+  ),
+  tr: ({ className, children, ...rest }) => (
+    <tr {...rest} className={mergeClassNames(className, "hover:bg-gray-50 transition-colors")}>
+      {children}
+    </tr>
+  ),
+  th: ({ className, children, ...rest }) => (
+    <th {...rest} className={mergeClassNames(className, "px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider")}>
+      {children}
+    </th>
+  ),
+  td: ({ className, children, ...rest }) => (
+    <td {...rest} className={mergeClassNames(className, "px-4 py-3 text-sm text-gray-800 whitespace-normal")}>
+      {children}
+    </td>
+  ),
+  hr: ({ className, ...rest }) => (
+    <hr {...rest} className={mergeClassNames(className, "my-4 border-gray-200")} />
+  ),
+  blockquote: ({ className, children, ...rest }) => (
+    <blockquote {...rest} className={mergeClassNames(className, "border-l-4 border-blue-500 pl-4 py-2 my-3 bg-blue-50 rounded-r")}>
+      {children}
+    </blockquote>
   ),
 }
 
@@ -165,7 +226,7 @@ const SummarySection = ({ insights, expandedPanels, togglePanel, renderSources }
           <div className="flex-1">
             <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">AI Summary</h3>
             <div className="text-gray-900 leading-relaxed mt-2 prose prose-sm max-w-none">
-              <ReactMarkdown components={markdownComponents}>
+              <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
                 {DOMPurify.sanitize(insights.summary)}
               </ReactMarkdown>
             </div>
@@ -213,23 +274,30 @@ const BusinessIntelSection = ({ insights, expandedPanels, togglePanel, renderSou
   ]
 
   return (
-    <Card className="p-6 border-l-4 border-l-purple-500 hover:shadow-lg transition-shadow bg-gradient-to-r from-purple-50 to-transparent">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 space-y-4">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-gradient-to-br from-purple-500 to-blue-500">
-              <Sparkles className="w-4 h-4 text-white" />
+    <Card className="p-8 border-l-4 border-l-purple-500 hover:shadow-xl transition-shadow bg-gradient-to-br from-purple-50 via-blue-50 to-transparent">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 space-y-6">
+          <div className="flex items-center gap-3 border-b border-purple-200 pb-4">
+            <div className="p-3 rounded-xl bg-gradient-to-br from-purple-500 to-blue-500 shadow-lg">
+              <Sparkles className="w-6 h-6 text-white" />
             </div>
-            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-              Business Intelligence Report
-            </h3>
+            <div>
+              <h3 className="text-lg font-bold text-gray-900">
+                Business Intelligence Report
+              </h3>
+              <p className="text-xs text-gray-600 mt-0.5">AI-Generated Strategic Analysis</p>
+            </div>
           </div>
 
-          {intel.conversation_summary && (
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Conversation Summary</p>
-              <div className="text-sm text-gray-800 leading-relaxed mt-1 prose prose-sm max-w-none">
-                <ReactMarkdown components={markdownComponents}>
+          {/* Only show conversation_summary if there's no executive_summary, or if they're different */}
+          {intel.conversation_summary && !intel.executive_summary && (
+            <div className="bg-white/60 rounded-lg p-5 border border-purple-100">
+              <p className="text-xs font-bold text-purple-700 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <span className="w-1 h-4 bg-purple-500 rounded"></span>
+                Conversation Summary
+              </p>
+              <div className="text-sm text-gray-800 leading-relaxed prose prose-sm max-w-none">
+                <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
                   {DOMPurify.sanitize(intel.conversation_summary)}
                 </ReactMarkdown>
               </div>
@@ -237,28 +305,29 @@ const BusinessIntelSection = ({ insights, expandedPanels, togglePanel, renderSou
           )}
 
           {intel.executive_summary && (
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Executive Summary</p>
-              <div className="text-sm text-gray-900 leading-relaxed mt-1 prose prose-sm max-w-none">
-                <ReactMarkdown components={markdownComponents}>
+            <div className="bg-white/80 rounded-lg p-6 border border-blue-100 shadow-sm">
+              <div className="text-sm text-gray-900 leading-relaxed prose prose-sm max-w-none">
+                <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
                   {DOMPurify.sanitize(intel.executive_summary)}
                 </ReactMarkdown>
               </div>
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             {intelColumns
               .filter(({ items }) => items && items.length)
               .map(({ title, items, border, accent }) => (
-                <div key={title} className={`bg-white/70 rounded-lg border ${border} p-4`}>
-                  <p className={`text-xs font-semibold ${accent} uppercase tracking-wide mb-2`}>{title}</p>
-                  <ul className="space-y-2 text-sm text-gray-800">
+                <div key={title} className={`bg-white/90 rounded-lg border-2 ${border} p-5 shadow-sm hover:shadow-md transition-shadow`}>
+                  <p className={`text-sm font-bold ${accent} uppercase tracking-wide mb-3 pb-2 border-b ${border}`}>
+                    {title}
+                  </p>
+                  <ul className="space-y-3 text-sm text-gray-800">
                     {items!.map((item, index) => (
                       <li key={`${title}-${index}`} className="flex items-start gap-2">
-                        <span className="text-gray-400 mt-1">•</span>
-                        <div className="flex-1 prose prose-sm max-w-none">
-                          <ReactMarkdown components={markdownComponents}>
+                        <span className={`${accent} mt-1.5 font-bold`}>•</span>
+                        <div className="flex-1 prose prose-sm max-w-none [&>p]:mb-1 [&>ul]:ml-3 [&>ol]:ml-3">
+                          <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
                             {DOMPurify.sanitize(item)}
                           </ReactMarkdown>
                         </div>
@@ -342,7 +411,7 @@ const ExecutiveFallbackSection = ({ insights }: { insights: InsightsData }) => {
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Executive Summary</h3>
           <div className="text-gray-900 leading-relaxed mt-2 prose prose-sm max-w-none">
-            <ReactMarkdown components={markdownComponents}>
+            <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
               {DOMPurify.sanitize(insights.business_intel.executive_summary)}
             </ReactMarkdown>
           </div>
@@ -486,7 +555,7 @@ const CustomQuestionsSection = ({ insights, expandedPanels, togglePanel, renderS
                 <div className="flex-1">
                   <p className="text-sm font-medium text-gray-800 mb-2">{question}</p>
                   <div className="text-sm text-gray-700 leading-relaxed prose prose-sm max-w-none">
-                    <ReactMarkdown components={markdownComponents}>
+                    <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
                       {typeof answer === "string" ? DOMPurify.sanitize(answer) : ""}
                     </ReactMarkdown>
                   </div>
@@ -520,7 +589,7 @@ const USPSection = ({ insights, expandedPanels, togglePanel, renderSources }: Pa
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">Unique Selling Proposition</h3>
           <div className="text-gray-900 leading-relaxed prose prose-sm max-w-none">
-            <ReactMarkdown components={markdownComponents}>
+            <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
               {DOMPurify.sanitize(insights.usp)}
             </ReactMarkdown>
           </div>
@@ -555,7 +624,7 @@ const ProductsServicesSection = ({ insights, expandedPanels, togglePanel, render
             <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Products & Services</h3>
           </div>
           <div className="text-gray-900 leading-relaxed prose prose-sm max-w-none">
-            <ReactMarkdown components={markdownComponents}>
+            <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
               {DOMPurify.sanitize(insights.products_services)}
             </ReactMarkdown>
           </div>
@@ -738,3 +807,4 @@ export function InsightsDisplay({ insights, url, onPanelToggle }: InsightsDispla
     </div>
   )
 }
+

@@ -1,8 +1,49 @@
 # Firmable AI Business Insight Agent
 
-An end-to-end prototype that fulfils the requirements in `docs/Requirement.md`: scrape a company homepage, derive structured business insights, and support conversational follow-up backed by cached analysis.
+An end-to-end prototype: scrape a company homepage, derive structured business insights, and support conversational follow
+## Deployment Notes
+
+### Current Production Deployment
+
+- **Frontend** – Deployed on Vercel at [firmable-ai-business-searcher.vercel.app](https://firmable-ai-business-searcher.vercel.app/)
+  - Uses Next.js 14 server actions and edge-friendly APIs
+  - Environment variables configured via Vercel dashboard
+  - Automatic deployments from `main` branch
+
+- **Backend** – Deployed on Railway at [firmable-ai-business-searcher-production.up.railway.app](https://firmable-ai-business-searcher-production.up.railway.app)
+  - FastAPI with Docker containerization
+  - Rate limiting with in-memory counters (10/min for analyze, 20/min for chat)
+  - Automatic deployments from `main` branch
+
+- **Secrets management** – Environment variables set in Vercel (frontend) and Railway (backend):
+  - `API_SECRET_KEY` – Bearer token for API authentication
+  - `GROQ_API_KEY` – Required for LLM analysis
+  - `FIRECRAWL_API_KEY` – Optional, for enhanced scraping
+  - `DEEPINFRA_API_KEY` – Optional, for semantic search features
+
+### Alternative Deployment Options
+
+- **Backend** – Can also run on Render, Heroku, or any Docker-compatible host
+- **Scaling** – For clustered deployments, configure SlowAPI with Redis or Memcached for distributed rate limitingacked by cached analysis.
 
 The system exposes two authenticated, rate-limited FastAPI endpoints (`/api/analyze` and `/api/chat`) and a Next.js interface that makes those capabilities easier to explore.
+
+
+## 🛠️ Development Environment
+
+**IDE Used**: Visual Studio Code, WebStorm (When I want to focus on frontend), v0 for initial UI
+
+**Recommended Extensions**:
+- Copilot
+- Python (Microsoft)
+- Pylance (Microsoft)
+- ESLint
+- Prettier - Code formatter
+- Tailwind CSS IntelliSense
+
+**Python Version**: 3.10+  
+**Node Version**: 18+  
+**Package Managers**: `uv` (Python), `pnpm` (Node.js)
 
 ---
 
@@ -14,6 +55,31 @@ The system exposes two authenticated, rate-limited FastAPI endpoints (`/api/anal
 - **Conversational follow-up** – `/api/chat` reuses the cached scrape + insight store so follow-up questions, business-intel summaries, or on-demand reports can be generated without re-scraping.
 - **Safety & governance** – Bearer-token authentication, SlowAPI rate limiting (10/min for analysis, 20/min for chat), structured error envelopes, and request validation via Pydantic.
 - **Modern UI** – A Next.js 14 frontend with Tailwind CSS, shadcn/ui components, server actions, and a chat workspace that mirrors the API contract (including custom questions and report generation).
+- **Asynchronous architecture** – Non-blocking async/await patterns with thread pool offloading for CPU-intensive operations, enabling concurrent request handling without event loop blocking.
+
+---
+
+## Asynchronous Programming
+
+The application implements asynchronous programming at multiple levels to handle concurrent requests efficiently:
+
+### Implementation Details:
+
+1. **Async Route Handlers**: All API endpoints use `async def` with FastAPI's native async capabilities, allowing the server to handle multiple requests concurrently.
+
+2. **Non-blocking Execution**: Blocking operations (web scraping, LLM API calls, file I/O) are offloaded to thread pools using `asyncio.to_thread()`
+
+3. **Parallel Processing**: `AIAnalyzer` uses `ThreadPoolExecutor` to run multiple LLM inference tasks concurrently, reducing total processing time:
+   - Default insights extraction
+   - Custom question answering
+   - Contact information validation
+   - Live website visits (when enabled)
+
+### Performance Benefits:
+
+- **Throughput**: Under load testing, the async architecture handles concurrent requests without blocking
+- **Response Time**: Event loop remains responsive to new requests while heavy operations run in background threads
+- **Resource Efficiency**: Better CPU utilization through concurrent execution of I/O-bound operations
 
 ---
 
@@ -88,7 +154,7 @@ Requests must include `Authorization: Bearer <API_SECRET_KEY>`.
 ```jsonc
 // Request body
 {
-  "url": "https://example.com",
+  "url": "https://n8n.com",
   "query": "Who are their primary competitors?",
   "conversation_history": [
     {"role": "user", "content": "What do they build?"},
@@ -98,15 +164,14 @@ Requests must include `Authorization: Bearer <API_SECRET_KEY>`.
 
 // Response
 {
-  "url": "https://example.com",
+  "url": "https://n8n.com",
   "query": "Who are their primary competitors?",
   "response": "Competitive messaging references Zapier, Make.com, and Workato as direct alternatives.",
   "timestamp": "2025-10-03T22:16:12.009812+00:00"
 }
 ```
 
-The frontend’s “Generate Business Report” button simply poses a long-form question to `/api/chat`, demonstrating how richer deliverables can be layered on without new endpoints.
-
+The frontend’s “Generate Business Report” button simply poses a long-form question to `/api/chat`
 ---
 
 ## Local Development
@@ -147,7 +212,7 @@ uv sync        # creates an isolated .venv based on pyproject.toml / uv.lock
 
 ```bash
 # Terminal 1 – FastAPI (reload on change)
-uv run --project . uvicorn api.index:app --reload --port 8000
+uv run uvicorn api.index:app --reload --port 8000
 
 # Terminal 2 – Next.js frontend
 pnpm dev       # serves http://localhost:3000
@@ -183,7 +248,7 @@ Tests cover:
 ## Deployment Notes
 
 - **Frontend** – Designed for Vercel (uses server actions and edge-friendly APIs). Supply the same environment variables via Vercel’s dashboard.
-- **Backend** – Can run on Railway, Fly.io, Render, or any container-friendly host. Rate limiting relies on in-memory counters by default; for clustered deployments configure a SlowAPI-compatible backend (Redis, Memcached, etc.).
+- **Backend** – Can run on Railway or any container-friendly host. Rate limiting relies on in-memory counters by default; for clustered deployments configure a SlowAPI-compatible backend (Redis, Memcached, etc.).
 - **Secrets management** – Set `API_SECRET_KEY`, `GROQ_API_KEY`, and optional API keys in your hosting provider
 
 ---

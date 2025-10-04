@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -20,12 +21,17 @@ async def analyze_website(
     orchestrator: AnalysisOrchestrator = Depends(get_analysis_orchestrator),
 ) -> AnalysisResponse:
     try:
-        insights = orchestrator.analyze(str(payload.url), payload.questions)
+        # Offload blocking operations to thread pool to prevent event loop blocking
+        insights = await asyncio.to_thread(
+            orchestrator.analyze,
+            str(payload.url),
+            payload.questions
+        )
     except Exception as exc:  # pragma: no cover - FastAPI handles HTTPException generation
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}") from exc
 
     return AnalysisResponse(
         url=str(payload.url),
         insights=insights,
-    timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
