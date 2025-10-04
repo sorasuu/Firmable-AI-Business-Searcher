@@ -6,7 +6,7 @@ import { useState, useRef, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Send, Bot, User } from "lucide-react"
+import { Send, Bot, User, MessageSquare, X } from "lucide-react"
 import { chatAboutWebsiteAction } from "@/app/actions"
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -22,6 +22,7 @@ interface ChatInterfaceProps {
   expanded?: boolean
   onFocusChange?: (active: boolean) => void
   onTranscriptChange?: (messages: Message[]) => void
+  onVisibilityChange?: (visible: boolean) => void
 }
 
 // Component for rendering markdown messages with sanitization
@@ -151,7 +152,7 @@ function MarkdownMessage({ content, isUser }: { content: string; isUser: boolean
   )
 }
 
-export function ChatInterface({ url, expanded = false, onFocusChange, onTranscriptChange }: ChatInterfaceProps) {
+export function ChatInterface({ url, expanded = false, onFocusChange, onTranscriptChange, onVisibilityChange }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -160,8 +161,15 @@ export function ChatInterface({ url, expanded = false, onFocusChange, onTranscri
   ])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [isVisible, setIsVisible] = useState(true)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const toggleVisibility = () => {
+    const newVisibility = !isVisible
+    setIsVisible(newVisibility)
+    onVisibilityChange?.(newVisibility)
+  }
 
   useEffect(() => {
     const container = messagesContainerRef.current
@@ -239,11 +247,27 @@ export function ChatInterface({ url, expanded = false, onFocusChange, onTranscri
   const containerHeightClass = expanded ? "h-[75vh] max-h-[820px]" : "h-[600px]"
 
   return (
-    <Card className={`flex flex-col ${containerHeightClass} shadow-xl border-gray-200 transition-all duration-200`}>
-      <div className="p-5 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-blue-50">
-        <h3 className="font-bold text-lg bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">Ask Follow-up Questions</h3>
-        <p className="text-sm text-gray-600 mt-1">Chat with AI about the website insights</p>
-      </div>
+    <div className="relative">
+      {/* Floating Action Button */}
+      <Button
+        onClick={toggleVisibility}
+        className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full shadow-2xl bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white transition-all duration-300 hover:scale-110"
+        size="icon"
+      >
+        {isVisible ? (
+          <X className="w-6 h-6" />
+        ) : (
+          <MessageSquare className="w-6 h-6" />
+        )}
+      </Button>
+
+      {/* Chat Interface */}
+      {isVisible && (
+        <Card className={`flex flex-col ${containerHeightClass} shadow-xl border-gray-200 transition-all duration-200`}>
+          <div className="p-5 border-b border-gray-200 bg-gradient-to-r from-purple-50 to-blue-50">
+            <h3 className="font-bold text-lg bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">Ask Follow-up Questions</h3>
+            <p className="text-sm text-gray-600 mt-1">Chat with AI about the website insights</p>
+          </div>
 
   <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-5 space-y-4 bg-gray-50">
         {messages.map((message, index) => (
@@ -324,5 +348,7 @@ export function ChatInterface({ url, expanded = false, onFocusChange, onTranscri
         </div>
       </form>
     </Card>
+      )}
+    </div>
   )
 }

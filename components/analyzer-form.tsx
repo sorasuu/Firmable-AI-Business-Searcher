@@ -31,13 +31,14 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   const [questions, setQuestions] = useState<string[]>([""])
   const [isChatFocused, setIsChatFocused] = useState(false)
   const [isBusinessIntelSourcesOpen, setIsBusinessIntelSourcesOpen] = useState(false)
+  const [isChatVisible, setIsChatVisible] = useState(true)
   const [chatTranscript, setChatTranscript] = useState<ChatMessage[]>([])
   const [isGeneratingReport, setIsGeneratingReport] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
   const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null)
   const focusScrollRef = useRef<number | null>(null)
 
-  const isChatActive = isChatFocused || isBusinessIntelSourcesOpen
+  const isChatActive = (isChatFocused || isBusinessIntelSourcesOpen) && isChatVisible
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -230,14 +231,18 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
           className={`${
             isChatActive
               ? "flex flex-col gap-6"
-              : "flex flex-col lg:flex-row gap-6"
+              : isChatVisible
+              ? "flex flex-col lg:flex-row gap-6"
+              : "flex flex-col"
           }`}
         >
           <div
             className={`${
               isChatActive
                 ? "order-2"
-                : "lg:w-1/2"
+                : isChatVisible
+                ? "lg:w-1/2"
+                : "w-full"
             } flex-1`}
           >
             <InsightsDisplay
@@ -254,14 +259,17 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
             className={`${
               isChatActive
                 ? "order-1"
-                : "lg:w-1/2"
-            } flex-1`}
+                : isChatVisible
+                ? "lg:w-1/2"
+                : "w-0"
+            }`}
           >
             <ChatInterface
               url={results.url}
               expanded={isChatActive}
               onFocusChange={handleChatFocusChange}
               onTranscriptChange={setChatTranscript}
+              onVisibilityChange={setIsChatVisible}
             />
           </div>
         </div>
