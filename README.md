@@ -149,7 +149,9 @@ graph TB
     style Services fill:#dc2626,stroke:#991b1b,color:#fff,stroke-width:3px
     style Data fill:#0891b2,stroke:#155e75,color:#fff,stroke-width:3px
     style External fill:#7c3aed,stroke:#5b21b6,color:#fff,stroke-width:3px
-```## High-Level Architecture Diagram
+```
+
+## High-Level Architecture Diagram
 
 ```mermaid
 graph TB
