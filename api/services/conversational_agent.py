@@ -87,7 +87,7 @@ class ConversationalAgent:
         # In-memory cache keyed by URL
         self.website_cache: Dict[str, Dict[str, Any]] = {}
 
-    def cache_website_data(self, url: str, scraped_data: Dict, insights: Dict):
+    def cache_website_data(self, url: str, scraped_data: Dict, insights: Dict, session_id: Optional[str] = None):
         """Cache website data and hydrate the shared semantic store."""
 
         normalized_url = str(url or scraped_data.get('url') or '').strip()
@@ -96,7 +96,7 @@ class ConversationalAgent:
 
         entry = None
         try:
-            entry = self.store.store_analysis(normalized_url, scraped_data, insights)
+            entry = self.store.store_analysis(normalized_url, scraped_data, insights, session_id=session_id)
         except Exception as error:
             print(f"[API] Failed to update analysis store for {normalized_url}: {error}")
 
@@ -114,7 +114,7 @@ class ConversationalAgent:
         normalized = str(url or '').strip()
         return self.website_cache.get(normalized)
     
-    def chat(self, url: str, query: str, conversation_history: Optional[List[Dict]] = None) -> str:
+    def chat(self, url: str, query: str, conversation_history: Optional[List[Dict]] = None, session_id: Optional[str] = None) -> str:
         """Answer conversational queries about a previously analyzed website.
 
         Uses cached insights and the shared semantic vector index to assemble
@@ -122,7 +122,7 @@ class ConversationalAgent:
         cached via ``cache_website_data`` (or previously stored in the analysis store).
         """
 
-        normalized_url, cached = self._get_or_restore_cached(url)
+        normalized_url, cached = self._get_or_restore_cached(url, session_id=session_id)
         if not cached:
             return "I don't have information about this website yet. Please analyze it first using the /api/analyze endpoint."
 
@@ -132,6 +132,7 @@ class ConversationalAgent:
                 cached=cached,
                 query=query,
                 conversation_history=conversation_history,
+                session_id=session_id,
             )
             if answer_text is None:
                 return "I don't have information about this website yet. Please analyze it first using the /api/analyze endpoint."
@@ -142,6 +143,7 @@ class ConversationalAgent:
                 question=query,
                 answer_text=answer_text,
                 context=context,
+                session_id=session_id,
             )
             return answer_text
 
@@ -156,8 +158,9 @@ class ConversationalAgent:
         url: str,
         query: str,
         conversation_history: Optional[List[Dict]] = None,
+        session_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        normalized_url, cached = self._get_or_restore_cached(url)
+        normalized_url, cached = self._get_or_restore_cached(url, session_id=session_id)
         if not cached:
             return None
 
@@ -167,6 +170,7 @@ class ConversationalAgent:
                 cached=cached,
                 query=query,
                 conversation_history=conversation_history,
+                session_id=session_id,
             )
             if answer_text is None:
                 return None
@@ -177,6 +181,7 @@ class ConversationalAgent:
                 question=query,
                 answer_text=answer_text,
                 context=context,
+                session_id=session_id,
             )
 
             formatted_sources = [
@@ -205,9 +210,10 @@ class ConversationalAgent:
         cached: Dict[str, Any],
         query: str,
         conversation_history: Optional[List[Dict]] = None,
+        session_id: Optional[str] = None,
     ) -> tuple[Optional[str], str, List[Dict[str, Any]]]:
         self._maybe_run_live_visit(normalized_url, query, cached)
-        context, source_results = self._build_context(normalized_url, cached, query)
+        context, source_results = self._build_context(normalized_url, cached, query, session_id=session_id)
 
         messages: List[Any] = [
             SystemMessage(content="""You are an AI assistant that helps users understand websites and businesses.
@@ -578,7 +584,7 @@ Rules:
 
         self._refresh_store_with_cache(cached)
     
-    def _build_context(self, url: str, cached_data: Dict[str, Any], query: str) -> tuple[str, List[Dict[str, Any]]]:
+    def _build_context(self, url: str, cached_data: Dict[str, Any], query: str, session_id: Optional[str] = None) -> tuple[str, List[Dict[str, Any]]]:
         scraped = cached_data.get('scraped_data', {})
         insights = cached_data.get('insights', {})
         chunks: List[str] = cached_data.get('chunks', []) or []
@@ -662,7 +668,7 @@ Rules:
 
         # Retrieve relevant chunks via semantic search fallback
         retrieved_chunks: List[str] = []
-        semantic_results = self._search_semantic_chunks(url, query, top_k=4)
+        semantic_results = self._search_semantic_chunks(url, query, top_k=4, session_id=session_id)
         if not semantic_results and chunks:
             semantic_results = self._fallback_chunk_scan(chunks, query, top_k=2)
 
@@ -708,6 +714,7 @@ Rules:
         question: str,
         answer_text: str,
         context: str,
+        session_id: Optional[str] = None,
     ) -> None:
         if not url or not answer_text.strip():
             return
@@ -804,7 +811,7 @@ Rules:
 
         cached['insights'] = insights
         try:
-            self.store.update_insights(url, insights)
+            self.store.update_insights(url, insights, session_id=session_id)
         except Exception as error:
             print(f"[API] Failed to persist chat-driven updates for {url}: {error}")
 
@@ -825,11 +832,11 @@ Rules:
         except Exception as error:
             print(f"[API] Failed to refresh semantic store with live content for {url}: {error}")
 
-    def _search_semantic_chunks(self, url: str, query: str, top_k: int = 4) -> List[Dict[str, Any]]:
+    def _search_semantic_chunks(self, url: str, query: str, top_k: int = 4, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if not url or not query or not query.strip():
             return []
         try:
-            results = self.store.search_chunks(url, query, top_k=top_k)
+            results = self.store.search_chunks(url, query, top_k=top_k, session_id=session_id)
         except Exception as error:
             print(f"[API] Chat semantic search failed for {url}: {error}")
             return []
@@ -891,13 +898,13 @@ Rules:
 
         return deduped
 
-    def _get_or_restore_cached(self, url: str) -> tuple[str, Optional[Dict[str, Any]]]:
+    def _get_or_restore_cached(self, url: str, session_id: Optional[str] = None) -> tuple[str, Optional[Dict[str, Any]]]:
         normalized_url = str(url or '').strip()
         cached = self.get_cached_data(normalized_url)
         if cached:
             return normalized_url, cached
 
-        entry = self.store.get(normalized_url)
+        entry = self.store.get(normalized_url, session_id=session_id)
         if entry and entry.insights:
             cached = {
                 'scraped_data': entry.scraped_data,

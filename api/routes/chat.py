@@ -21,6 +21,9 @@ async def chat_about_website(
     _: None = Depends(verify_auth),
     chat_agent: ConversationalAgent = Depends(get_chat_agent),
 ) -> ConversationResponse:
+    # Use provided session_id to ensure context isolation
+    session_id = payload.session_id
+    
     try:
         # Offload blocking operations to thread pool to prevent event loop blocking
         response_text = await asyncio.to_thread(
@@ -28,6 +31,7 @@ async def chat_about_website(
             url=str(payload.url),
             query=payload.query,
             conversation_history=payload.conversation_history,
+            session_id=session_id,
         )
     except Exception as exc:  # pragma: no cover - FastAPI handles HTTPException generation
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -37,4 +41,5 @@ async def chat_about_website(
         query=payload.query,
         response=response_text,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        session_id=session_id or "default",
     )

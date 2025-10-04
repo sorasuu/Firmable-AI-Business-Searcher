@@ -248,6 +248,10 @@ Authorization: Bearer <API_SECRET_KEY>
 | `POST /api/chat` | 20 requests/min per IP | Answers follow-up questions using cached data; conversation history can be supplied to maintain context. |
 | `GET /api/health`, `GET /health`, `GET /` | unrestricted | Health probes and minimal metadata used by the frontend bootstrap. |
 
+### Session Isolation
+
+Both `/api/analyze` and `/api/chat` support an optional `session_id` parameter for multi-user isolation. When provided, analysis data and chat conversations are namespaced by session, preventing users from accessing each other's cached data. Sessions automatically expire after 1 hour of inactivity.
+
 ---
 
 ## API Usage Examples
@@ -260,7 +264,8 @@ curl -X POST "https://firmable-ai-business-searcher-production.up.railway.app/ap
   -H "Authorization: Bearer your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://stripe.com"
+    "url": "https://stripe.com",
+    "session_id": "user-session-123"
   }'
 ```
 
@@ -268,6 +273,7 @@ curl -X POST "https://firmable-ai-business-searcher-production.up.railway.app/ap
 ```json
 {
   "url": "https://stripe.com",
+  "session_id": "user-session-123",
   "insights": {
     "summary": "Stripe is a financial infrastructure platform for internet businesses, providing payment processing APIs and tools for building online commerce experiences.",
     "industry": "Financial Technology (FinTech)",
@@ -324,7 +330,8 @@ curl -X POST "https://firmable-ai-business-searcher-production.up.railway.app/ap
       "What is their pricing model?",
       "Do they offer a free tier?",
       "What integrations do they support?"
-    ]
+    ],
+    "session_id": "user-session-456"
   }'
 ```
 
@@ -332,6 +339,7 @@ curl -X POST "https://firmable-ai-business-searcher-production.up.railway.app/ap
 ```json
 {
   "url": "https://notion.so",
+  "session_id": "user-session-456",
   "insights": {
     "summary": "Notion is an all-in-one workspace combining notes, docs, wikis, and project management tools for teams and individuals.",
     "industry": "Productivity Software / Collaboration Tools",
@@ -386,7 +394,8 @@ curl -X POST "https://firmable-ai-business-searcher-production.up.railway.app/ap
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://stripe.com",
-    "query": "Who are their main competitors?"
+    "query": "Who are their main competitors?",
+    "session_id": "user-session-123"
   }'
 ```
 
@@ -395,6 +404,7 @@ curl -X POST "https://firmable-ai-business-searcher-production.up.railway.app/ap
 {
   "url": "https://stripe.com",
   "query": "Who are their main competitors?",
+  "session_id": "user-session-123",
   "response": "Based on the analyzed content, Stripe's main competitors in the payment processing and financial infrastructure space include:\n\n1. **PayPal/Braintree** - Established payment processor with strong brand recognition\n2. **Square** - Focuses on small businesses and point-of-sale solutions\n3. **Adyen** - Enterprise-focused payment platform popular in Europe\n4. **Checkout.com** - Developer-friendly alternative gaining market share\n5. **Traditional processors** - First Data, Worldpay, and legacy payment gateways\n\nStripe differentiates itself through superior developer experience, comprehensive API documentation, and modern infrastructure designed for internet businesses.",
   "timestamp": "2025-10-04T10:40:15.456789+00:00"
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -144,28 +145,54 @@ class WebsiteEntry:
     chunks: List[str] = field(default_factory=list)
     index: Any = None
     dimension: Optional[int] = None
+    timestamp: float = field(default_factory=time.time)
+    session_id: Optional[str] = None
 
     def has_index(self) -> bool:
         return self.index is not None and self.dimension is not None and self.dimension > 0
+    
+    def is_expired(self, ttl_seconds: int = 3600) -> bool:
+        """Check if entry has expired (default 1 hour)."""
+        return (time.time() - self.timestamp) > ttl_seconds
 
 
 class AnalysisStore:
     """In-memory store for analyzed websites and their semantic indexes."""
 
-    def __init__(self, embedder: Optional[DeepInfraEmbeddingClient] = None) -> None:
+    def __init__(self, embedder: Optional[DeepInfraEmbeddingClient] = None, ttl_seconds: int = 3600) -> None:
         self._embedder = embedder or DeepInfraEmbeddingClient()
         self._data: Dict[str, WebsiteEntry] = {}
         self._lock = threading.RLock()
+        self._ttl_seconds = ttl_seconds
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def prepare_site(self, url: str, scraped_data: Dict[str, Any]) -> WebsiteEntry:
+    def _make_key(self, url: str, session_id: Optional[str] = None) -> str:
+        """Generate storage key with optional session namespacing."""
+        url = url.strip()
+        if session_id:
+            return f"{session_id}:{url}"
+        return url
+    
+    def _cleanup_expired(self) -> None:
+        """Remove expired entries (called periodically)."""
+        with self._lock:
+            expired_keys = [
+                key for key, entry in self._data.items()
+                if entry.is_expired(self._ttl_seconds)
+            ]
+            for key in expired_keys:
+                logger.info(f"Removing expired entry: {key}")
+                del self._data[key]
+
+    def prepare_site(self, url: str, scraped_data: Dict[str, Any], session_id: Optional[str] = None) -> WebsiteEntry:
         url = (url or scraped_data.get("url") or "").strip()
         if not url:
             raise ValueError("URL is required to prepare site data")
-
-        entry = WebsiteEntry(url=url, scraped_data=scraped_data)
+        
+        key = self._make_key(url, session_id)
+        entry = WebsiteEntry(url=url, scraped_data=scraped_data, session_id=session_id)
         entry.chunks = self._prepare_chunks(scraped_data.get("structured_chunks", []))
 
         if faiss is None:
@@ -182,39 +209,52 @@ class AnalysisStore:
                 logger.info("No embeddings generated for %s; index will be unavailable.", url)
 
         with self._lock:
-            existing = self._data.get(url)
+            self._cleanup_expired()
+            existing = self._data.get(key)
             if existing and existing.insights:
                 entry.insights = existing.insights
-            self._data[url] = entry
+            self._data[key] = entry
+            logger.info(
+                "Analysis stored for session=%s, url=%s, chunks=%d, ttl=%ds",
+                session_id or "global",
+                url,
+                len(entry.chunks),
+                self._ttl_seconds
+            )
 
         return entry
 
-    def update_insights(self, url: str, insights: Dict[str, Any]) -> None:
+    def update_insights(self, url: str, insights: Dict[str, Any], session_id: Optional[str] = None) -> None:
         if not url:
             return
+        key = self._make_key(url, session_id)
         with self._lock:
-            entry = self._data.get(url)
+            entry = self._data.get(key)
             if entry:
                 entry.insights = insights
+                entry.timestamp = time.time()  # Refresh timestamp
             else:
-                self._data[url] = WebsiteEntry(url=url, insights=insights)
+                self._data[key] = WebsiteEntry(url=url, insights=insights, session_id=session_id)
 
-    def store_analysis(self, url: str, scraped_data: Dict[str, Any], insights: Dict[str, Any]) -> WebsiteEntry:
-        entry = self.prepare_site(url, scraped_data)
-        self.update_insights(url, insights)
+    def store_analysis(self, url: str, scraped_data: Dict[str, Any], insights: Dict[str, Any], session_id: Optional[str] = None) -> WebsiteEntry:
+        entry = self.prepare_site(url, scraped_data, session_id)
+        self.update_insights(url, insights, session_id)
         return entry
 
-    def get(self, url: str) -> Optional[WebsiteEntry]:
+    def get(self, url: str, session_id: Optional[str] = None) -> Optional[WebsiteEntry]:
+        key = self._make_key(url, session_id)
         with self._lock:
-            entry = self._data.get(url)
-            if entry:
-                return entry
-        return None
+            self._cleanup_expired()
+            entry = self._data.get(key)
+            if entry and entry.is_expired(self._ttl_seconds):
+                del self._data[key]
+                return None
+            return entry
 
-    def search_chunks(self, url: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search_chunks(self, url: str, query: str, top_k: int = 5, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if not query or not query.strip():
             return []
-        entry = self.get(url)
+        entry = self.get(url, session_id)
         if not entry or not entry.has_index() or faiss is None:
             return []
 
@@ -252,8 +292,8 @@ class AnalysisStore:
             )
         return results
 
-    def get_chunks(self, url: str) -> List[str]:
-        entry = self.get(url)
+    def get_chunks(self, url: str, session_id: Optional[str] = None) -> List[str]:
+        entry = self.get(url, session_id)
         return entry.chunks if entry else []
 
     # ------------------------------------------------------------------

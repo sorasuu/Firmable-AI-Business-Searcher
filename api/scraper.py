@@ -326,7 +326,7 @@ class WebsiteScraper:
             print(f"[CACHE] Failed to rebuild structured data for {url}: {exc}")
             return None
     
-    def scrape_website(self, url: str) -> Dict:
+    def scrape_website(self, url: str, session_id: Optional[str] = None) -> Dict:
         """
         Scrape website using Firecrawl's intelligent extraction.
         Firecrawl handles JavaScript rendering, anti-bot detection, and smart content extraction.

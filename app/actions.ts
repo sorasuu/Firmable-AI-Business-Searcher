@@ -3,6 +3,7 @@
 interface AnalysisRequest {
   url: string
   questions?: string[]
+  session_id?: string
 }
 
 interface AnalysisResponse {
@@ -31,12 +32,14 @@ interface AnalysisResponse {
     }>>
   }
   timestamp: string
+  session_id: string
 }
 
 interface ChatRequest {
   url: string
   query: string
   conversation_history?: Array<{ role: string; content: string }>
+  session_id?: string
 }
 
 interface ChatResponse {
@@ -44,6 +47,7 @@ interface ChatResponse {
   query: string
   response: string
   timestamp: string
+  session_id: string
 }
 
 interface BusinessIntelligence {

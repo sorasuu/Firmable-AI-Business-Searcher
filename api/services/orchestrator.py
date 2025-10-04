@@ -24,12 +24,12 @@ class AnalysisOrchestrator:
     def chat_agent(self) -> ConversationalAgent:
         return self._chat_agent
 
-    def analyze(self, url: str, questions: Optional[List[str]] = None) -> Dict[str, Any]:
-        scraped_data = self._scraper.scrape_website(url)
+    def analyze(self, url: str, questions: Optional[List[str]] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
+        scraped_data = self._scraper.scrape_website(url, session_id=session_id)
         insights = self._analyzer.analyze_website(scraped_data, questions)
 
         # Cache website data for conversational follow-ups
-        self._chat_agent.cache_website_data(url, scraped_data, insights)
+        self._chat_agent.cache_website_data(url, scraped_data, insights, session_id=session_id)
 
         if questions:
             self._augment_custom_answers(url, questions, insights)

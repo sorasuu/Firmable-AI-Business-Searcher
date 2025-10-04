@@ -28,6 +28,7 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<AnalyzerResult | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const [questions, setQuestions] = useState<string[]>([""])
   const [isChatFocused, setIsChatFocused] = useState(false)
   const [isBusinessIntelSourcesOpen, setIsBusinessIntelSourcesOpen] = useState(false)
@@ -57,6 +58,8 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
         questions: validQuestions.length > 0 ? validQuestions : undefined
       })
       setResults(data)
+      // Store session_id for subsequent chat requests
+      setSessionId(data.session_id)
       onResultsChange?.(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
@@ -68,6 +71,7 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
   const handleReset = () => {
     setUrl("")
     setResults(null)
+    setSessionId(null)
     setError(null)
     setQuestions([""])
     setIsChatFocused(false)
@@ -100,6 +104,7 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
         url: results.url,
         query: reportQuery,
         conversation_history: limitedHistory,
+        session_id: sessionId || undefined,
       })
 
       // Update results with the business intelligence response
@@ -266,6 +271,7 @@ export function AnalyzerForm({ onResultsChange }: AnalyzerFormProps) {
           >
             <ChatInterface
               url={results.url}
+              sessionId={sessionId || undefined}
               expanded={isChatActive}
               onFocusChange={handleChatFocusChange}
               onTranscriptChange={setChatTranscript}

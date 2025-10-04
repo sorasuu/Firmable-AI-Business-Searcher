@@ -19,6 +19,7 @@ interface Message {
 
 interface ChatInterfaceProps {
   url: string
+  sessionId?: string
   expanded?: boolean
   onFocusChange?: (active: boolean) => void
   onTranscriptChange?: (messages: Message[]) => void
@@ -152,7 +153,7 @@ function MarkdownMessage({ content, isUser }: { content: string; isUser: boolean
   )
 }
 
-export function ChatInterface({ url, expanded = false, onFocusChange, onTranscriptChange, onVisibilityChange }: ChatInterfaceProps) {
+export function ChatInterface({ url, sessionId, expanded = false, onFocusChange, onTranscriptChange, onVisibilityChange }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -204,6 +205,7 @@ export function ChatInterface({ url, expanded = false, onFocusChange, onTranscri
         url,
         query: userMessage,
         conversation_history: conversationHistory,
+        session_id: sessionId,
       })
 
       setMessages((prev) => [
