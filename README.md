@@ -213,6 +213,8 @@ graph TB
     style External fill:#7c3aed,stroke:#5b21b6,color:#fff,stroke-width:3px
 ```
 
+## High-Level Architecture
+
 The system consists of:
 
 - **Next.js Frontend** (Vercel)  Analyzer form with custom questions, insight cards, contact panels, and chat interface. Uses server actions to call the FastAPI backend with Bearer auth.
