@@ -85,7 +85,7 @@ The application implements asynchronous programming at multiple levels to handle
 
 ## Architecture Overview
 
-** For detailed architecture diagrams and design decisions, see [ARCHITECTURE.md](./ARCHITECTURE.md) **
+**For detailed architecture diagrams and design decisions**, see [ARCHITECTURE.md](./ARCHITECTURE.md) 
 
 ## High-Level Architecture Diagram
 
