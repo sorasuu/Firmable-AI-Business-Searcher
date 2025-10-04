@@ -11,6 +11,7 @@ from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, H
 from langchain_groq import ChatGroq  # type: ignore[import-not-found]
 from pydantic import BaseModel, Field
 
+from api.core.resilience import call_llm_with_resilience_sync
 from api.groq_services import GroqCompoundClient
 from api.data_store import AnalysisStore, WebsiteEntry, analysis_store
 
@@ -46,6 +47,17 @@ class AIAnalyzer:
             self.browser_question_limit = int(os.environ.get("GROQ_BROWSER_QUESTION_LIMIT", "3"))
         except ValueError:
             self.browser_question_limit = 3
+
+    def _call_llm_resilient(self, chain_or_llm, inputs: Dict[str, Any]) -> Any:
+        """Call LLM with resilience patterns."""
+        try:
+            def sync_call():
+                return chain_or_llm.invoke(inputs)
+
+            return call_llm_with_resilience_sync(sync_call, "groq_llm_analysis")
+        except Exception as e:
+            print(f"[API] LLM call failed after retries: {e}")
+            raise
 
     def _default_insight_values(self) -> Dict[str, str]:
         return {
@@ -260,8 +272,8 @@ Be specific, concise, and accurate. Keep each field under 200 characters (summar
             # Create chain without Pydantic parser
             chain = chat_prompt | self.llm
 
-            # Run analysis
-            response = chain.invoke({
+            # Run analysis with resilience
+            response = self._call_llm_resilient(chain, {
                 "context": context
             })
 
@@ -457,7 +469,7 @@ Be specific, concise, and accurate. Keep each field under 200 characters (summar
 
                 qa_chain = qa_prompt | self.llm
 
-                response = qa_chain.invoke({
+                response = self._call_llm_resilient(qa_chain, {
                     "context": relevant_context,
                     "question": question
                 })

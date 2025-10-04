@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import numpy as np
 import requests
 from dotenv import load_dotenv
+from api.core.resilience import call_embedding_with_resilience_sync
 
 try:  # pragma: no cover - optional dependency guard
     import faiss  # type: ignore
@@ -72,7 +73,8 @@ class DeepInfraEmbeddingClient:
 
         for batch in _batched(filtered, self.batch_size):
             payload = {"inputs": batch}
-            try:
+
+            def make_request():
                 response = requests.post(
                     self.endpoint,
                     headers=headers,
@@ -80,13 +82,17 @@ class DeepInfraEmbeddingClient:
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-            except requests.RequestException as exc:  # pragma: no cover - network dependent
-                logger.error("DeepInfra embedding request failed: %s", exc)
+                return response
+
+            try:
+                response = call_embedding_with_resilience_sync(make_request, "deepinfra_embedding")
+            except Exception as exc:
+                logger.error("DeepInfra embedding request failed after retries: %s", exc)
                 return np.zeros((0, 0), dtype=np.float32)
 
             try:
                 data = response.json()
-            except ValueError as exc:  # pragma: no cover - unexpected payload
+            except ValueError as exc:
                 logger.error("Invalid JSON from DeepInfra: %s", exc)
                 return np.zeros((0, 0), dtype=np.float32)
 

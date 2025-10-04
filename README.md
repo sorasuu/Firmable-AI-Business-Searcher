@@ -653,11 +653,27 @@ Tests cover:
 
 ---
 
-## Future Enhancements
+## Future Enhancements & Known Limitations
 
+### Known Limitations
+- **In-memory storage**: AnalysisStore and rate limiting use in-memory storage, preventing multi-worker scaling and data persistence across restarts
+- **Semantic search only**: Lacks keyword-based or hybrid search; relies solely on FAISS embeddings
+- **Basic content processing**: Limited cleaning and chunking strategies
+- **Limited caching**: No caching for LLM responses or repeated analyses
+- **Predefined models**: No dynamic model selection or A/B testing capabilities
+
+### Future Enhancements
 - Multi-page crawling with domain guards and queue limits
-- Pluggable semantic search (e.g., DeepInfra or OpenAI embeddings stored in vector DBs)
-- Export routes for saved analyses (CSV/PDF/webhook)
-- Workspace persistence (swap in Postgres/Redis for the in-memory `AnalysisStore`)
+- Pluggable semantic search with vector databases (pgvector, Pinecone, ...)
+- Export routes for saved analyses (CSV/PDF)
+- Distributed persistence (Postgres/Redis for AnalysisStore and rate limiting)
+- Hybrid search combining semantic and keyword matching
+- Enhanced content processing with better chunking and multi-modal support
+- User authentication and role-based access control
+- LLM response caching and deduplication
+- Dynamic model selection and performance comparison
+- Real-time analysis progress updates
+- Mobile-responsive UI improvements
+- AI Analyze Pipeline evaluation 
 
 

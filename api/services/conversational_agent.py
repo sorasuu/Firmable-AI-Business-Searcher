@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlunparse
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
+from api.core.resilience import call_llm_with_resilience_sync
 from api.groq_services import GroqCompoundClient
 from api.data_store import AnalysisStore, analysis_store
 
@@ -86,6 +87,16 @@ class ConversationalAgent:
 
         # In-memory cache keyed by URL
         self.website_cache: Dict[str, Dict[str, Any]] = {}
+
+    def _call_llm_resilient(self, messages):
+        """Call LLM with resilience patterns."""
+        try:
+            def sync_call():
+                return self.llm.invoke(messages)
+            return call_llm_with_resilience_sync(sync_call, "groq_llm_chat")
+        except Exception as e:
+            print(f"[CHAT] LLM call failed after retries: {e}")
+            raise
 
     def cache_website_data(self, url: str, scraped_data: Dict, insights: Dict, session_id: Optional[str] = None):
         """Cache website data and hydrate the shared semantic store."""
@@ -244,7 +255,7 @@ User Question: {query}
 """
         messages.append(HumanMessage(content=context_prompt))
 
-        response = self.llm.invoke(messages)
+        response = self._call_llm_resilient(messages)
         answer_text = response.content.strip() if response and response.content else None
         return answer_text, context, source_results
 
@@ -291,7 +302,7 @@ Respond with JSON only."""),
                 HumanMessage(content=f"Website Context:\n{context}\n\nReturn JSON only.")
             ]
 
-            response = self.llm.invoke(messages)
+            response = self._call_llm_resilient(messages)
             raw_content = (response.content or "").strip() if response else ""
         except Exception as error:
             print(f"[API] Chat contact extraction error for {normalized_url}: {error}")
@@ -385,7 +396,7 @@ Rules:
         ]
 
         try:
-            response = self.llm.invoke(messages)
+            response = self._call_llm_resilient(messages)
             raw_content = (response.content or "").strip() if response else ""
         except Exception as error:
             print(f"[API] Business report generation failed for {normalized_url}: {error}")
@@ -754,7 +765,7 @@ Rules:
         ]
 
         try:
-            verifier_response = self.llm.invoke(verifier_messages)
+            verifier_response = self._call_llm_resilient(verifier_messages)
             raw_content = (verifier_response.content or "").strip()
         except Exception as error:
             print(f"[API] Chat update verification failed for {url}: {error}")

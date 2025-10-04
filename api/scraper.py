@@ -20,6 +20,7 @@ except ImportError:
 from langchain_groq import ChatGroq  # type: ignore[import-not-found]
 from langchain.prompts import ChatPromptTemplate
 from urllib.parse import urlparse, urljoin
+from api.core.resilience import call_llm_with_resilience_sync, call_scraper_with_resilience_sync
 
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env.local"))
@@ -63,6 +64,16 @@ class WebsiteScraper:
             temperature=0.1,
             groq_api_key=os.environ.get("GROQ_API_KEY", "")
         )
+
+    def _call_llm_resilient(self, messages):
+        """Call LLM with resilience patterns."""
+        try:
+            def sync_call():
+                return self.llm.invoke(messages)
+            return call_llm_with_resilience_sync(sync_call, "groq_llm_scraper")
+        except Exception as e:
+            print(f"[SCRAPER] LLM call failed after retries: {e}")
+            raise
     
     def _load_cache(self) -> Dict:
         """Load cache from JSONL file with recovery for malformed lines"""
@@ -340,13 +351,16 @@ class WebsiteScraper:
         try:
             print(f"[SCRAPER] Starting Firecrawl scrape for: {url}")
             
-            # Use Firecrawl's scrape endpoint with all features enabled
-            scrape_result = self.app.scrape(
-                url,
-                formats=["markdown", "html", "links"],
-                only_main_content=False,
-                wait_for=2000,
-            )
+            # Use Firecrawl's scrape endpoint with resilience
+            def firecrawl_scrape():
+                return self.app.scrape(
+                    url,
+                    formats=["markdown", "html", "links"],
+                    only_main_content=False,
+                    wait_for=2000,
+                )
+            
+            scrape_result = call_scraper_with_resilience_sync(firecrawl_scrape, "firecrawl_scraper")
             
             print(f"[SCRAPER] Firecrawl scrape completed successfully")
             
@@ -403,7 +417,10 @@ class WebsiteScraper:
         try:
             print(f"[SCRAPER] Using BeautifulSoup fallback for: {url}")
             
-            response = requests.get(url, headers=self.headers, timeout=10)
+            def beautifulsoup_request():
+                return requests.get(url, headers=self.headers, timeout=10)
+            
+            response = call_scraper_with_resilience_sync(beautifulsoup_request, "beautifulsoup_scraper")
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'lxml')
@@ -715,7 +732,7 @@ class WebsiteScraper:
                 ("human", human_prompt)
             ])
             messages = prompt.format_messages(context=combined_context)
-            response = self.llm.invoke(messages)
+            response = self._call_llm_resilient(messages)
             parsed = self._parse_contact_response(response.content)
             if parsed:
                 return self._normalize_contact_result(parsed, default_info)
