@@ -85,7 +85,133 @@ The application implements asynchronous programming at multiple levels to handle
 
 ## Architecture Overview
 
-** For detailed architecture diagrams and design decisions, see [ARCHITECTURE.md](./ARCHITECTURE.md)**
+** For detailed architecture diagrams and design decisions, see [ARCHITECTURE.md](./ARCHITECTURE.md) **
+
+## High-Level Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph Frontend["🌐 Frontend Layer - Next.js 14"]
+        UI[Analyzer Form<br/>+ Chat Interface<br/>+ Insights Display]
+        Actions[Server Actions<br/>app/actions.ts]
+        UI --> Actions
+    end
+
+    subgraph API["🚀 API Layer - FastAPI"]
+        Gateway[API Gateway<br/>CORS + Auth + Rate Limiter]
+        AnalyzeRoute[POST /api/analyze<br/>10 req/min]
+        ChatRoute[POST /api/chat<br/>20 req/min]
+        HealthRoute[GET /api/health]
+        
+        Actions -->|HTTPS Bearer Auth| Gateway
+        Gateway --> AnalyzeRoute
+        Gateway --> ChatRoute
+        Gateway --> HealthRoute
+    end
+
+    subgraph Services["⚙️ Service Layer"]
+        Orchestrator[AnalysisOrchestrator<br/>Coordinates workflow]
+        ConvAgent[ConversationalAgent<br/>Chat + Reports]
+        Scraper[WebsiteScraper<br/>Firecrawl + BS4]
+        Analyzer[AIAnalyzer<br/>LLM Processing]
+        
+        AnalyzeRoute --> Orchestrator
+        ChatRoute --> ConvAgent
+        Orchestrator --> Scraper
+        Orchestrator --> Analyzer
+        Orchestrator --> ConvAgent
+    end
+
+    subgraph Data["💾 Data & Cache Layer"]
+        Cache[JSONL Cache<br/>scraped data]
+        Store[AnalysisStore<br/>In-Memory Store]
+        FAISS[FAISS Vector Index<br/>Semantic Search]
+        
+        Scraper --> Cache
+        Analyzer --> Store
+        ConvAgent --> Store
+        Store --> FAISS
+    end
+
+    subgraph External["☁️ External Services"]
+        Firecrawl[Firecrawl API<br/>Web Scraping]
+        GroqLLM[Groq API<br/>ChatGroq LLM]
+        DeepInfra[DeepInfra API<br/>Embeddings]
+        
+        Scraper -->|Primary| Firecrawl
+        Analyzer --> GroqLLM
+        ConvAgent --> GroqLLM
+        Store -->|Optional| DeepInfra
+    end
+
+    style Frontend fill:#4f46e5,stroke:#312e81,color:#fff,stroke-width:3px
+    style API fill:#059669,stroke:#065f46,color:#fff,stroke-width:3px
+    style Services fill:#dc2626,stroke:#991b1b,color:#fff,stroke-width:3px
+    style Data fill:#0891b2,stroke:#155e75,color:#fff,stroke-width:3px
+    style External fill:#7c3aed,stroke:#5b21b6,color:#fff,stroke-width:3px
+```## High-Level Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph Frontend["🌐 Frontend Layer - Next.js 14"]
+        UI[Analyzer Form<br/>+ Chat Interface<br/>+ Insights Display]
+        Actions[Server Actions<br/>app/actions.ts]
+        UI --> Actions
+    end
+
+    subgraph API["🚀 API Layer - FastAPI"]
+        Gateway[API Gateway<br/>CORS + Auth + Rate Limiter]
+        AnalyzeRoute[POST /api/analyze<br/>10 req/min]
+        ChatRoute[POST /api/chat<br/>20 req/min]
+        HealthRoute[GET /api/health]
+        
+        Actions -->|HTTPS Bearer Auth| Gateway
+        Gateway --> AnalyzeRoute
+        Gateway --> ChatRoute
+        Gateway --> HealthRoute
+    end
+
+    subgraph Services["⚙️ Service Layer"]
+        Orchestrator[AnalysisOrchestrator<br/>Coordinates workflow]
+        ConvAgent[ConversationalAgent<br/>Chat + Reports]
+        Scraper[WebsiteScraper<br/>Firecrawl + BS4]
+        Analyzer[AIAnalyzer<br/>LLM Processing]
+        
+        AnalyzeRoute --> Orchestrator
+        ChatRoute --> ConvAgent
+        Orchestrator --> Scraper
+        Orchestrator --> Analyzer
+        Orchestrator --> ConvAgent
+    end
+
+    subgraph Data["💾 Data & Cache Layer"]
+        Cache[JSONL Cache<br/>scraped data]
+        Store[AnalysisStore<br/>In-Memory Store]
+        FAISS[FAISS Vector Index<br/>Semantic Search]
+        
+        Scraper --> Cache
+        Analyzer --> Store
+        ConvAgent --> Store
+        Store --> FAISS
+    end
+
+    subgraph External["☁️ External Services"]
+        Firecrawl[Firecrawl API<br/>Web Scraping]
+        GroqLLM[Groq API<br/>ChatGroq LLM]
+        DeepInfra[DeepInfra API<br/>Embeddings]
+        
+        Scraper -->|Primary| Firecrawl
+        Analyzer --> GroqLLM
+        ConvAgent --> GroqLLM
+        Store -->|Optional| DeepInfra
+    end
+
+    style Frontend fill:#4f46e5,stroke:#312e81,color:#fff,stroke-width:3px
+    style API fill:#059669,stroke:#065f46,color:#fff,stroke-width:3px
+    style Services fill:#dc2626,stroke:#991b1b,color:#fff,stroke-width:3px
+    style Data fill:#0891b2,stroke:#155e75,color:#fff,stroke-width:3px
+    style External fill:#7c3aed,stroke:#5b21b6,color:#fff,stroke-width:3px
+```
 
 The system consists of:
 
