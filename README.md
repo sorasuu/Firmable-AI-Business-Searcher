@@ -192,6 +192,8 @@ Supporting modules:
 - **Anti-Bot Circumvention**: Handles modern bot detection mechanisms (Cloudflare, reCAPTCHA) that would block standard HTTP clients
 - **Structured Output**: Returns clean, markdown-formatted content optimized for LLM consumption
 - **Reliability**: Cloud-based infrastructure handles complex scenarios (redirects, cookies, session management) that fail with local scraping
+- **Scalability Over Playwright, Puperteer**: While Playwright and Puperteer offers similar JavaScript rendering capabilities, running browser instances in the backend is resource-intensive (high memory/CPU usage per session) and doesn't scale well under concurrent load. Firecrawl's cloud-based approach offloads this overhead, enabling the backend to remain lightweight and handle multiple requests efficiently.
+
 
 **Why BeautifulSoup4 (Fallback)?**
 - **Zero External Dependencies**: Works without API keys or network calls when Firecrawl is unavailable
@@ -218,14 +220,13 @@ Supporting modules:
 - **Reasoning + JSON Modes**: Built-in reasoning capabilities with JSON Object/Schema modes ensure structured, validated outputs for business intelligence tasks
 - **Cost-Efficient Deployment**: Compact model size with cached input pricing ($0.05/20M tokens) makes repeated analysis economical
 
-**Embedding Model: BAAI/bge-base-en-v1.5 (via DeepInfra)**
+**Embedding Model: BAAI/bge-m3 (via DeepInfra)**
 
-**Why BGE-Base?**
-- **Industry Standard**: One of the most widely adopted open-source embedding models, ranked top 10 on MTEB benchmark
-- **Optimal Dimensions**: 768-dimensional embeddings balance semantic richness with computational efficiency
-- **Multilingual Support**: Strong cross-lingual transfer learning despite being English-focused
-- **FAISS Compatibility**: Optimized for vector similarity search in high-dimensional spaces
-- **Cost-Effective**: DeepInfra's serverless pricing model charges only for actual usage
+**Why BGE-M3?**
+- **Multilingual Excellence**: BGE-M3 (M3 = Multi-lingual, Multi-functionality, Multi-granularity) supports 100+ languages with superior cross-lingual retrieval capabilities
+- **MTEB Leaderboard**: Consistently ranks in the top 10 on the Massive Text Embedding Benchmark (MTEB), outperforming many larger proprietary models
+- **Cost-Effective**: DeepInfra's serverless pricing model charges only for actual usage, no minimum commitments
+- **High Familiarity & Reliability**: Extensively tested across diverse embedding tasks with consistent performance (personal experiences)
 
 ---
 
