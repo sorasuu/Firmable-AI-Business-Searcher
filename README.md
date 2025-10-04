@@ -668,9 +668,8 @@ Tests cover:
 - Export routes for saved analyses (CSV/PDF)
 - Distributed persistence (Postgres/Redis for AnalysisStore and rate limiting)
 - Hybrid search combining semantic and keyword matching
-- Enhanced content processing with better chunking and multi-modal support
-- User authentication and role-based access control
-- LLM response caching and deduplication
+- Enhanced content processing with better chunking 
+- LLM response caching 
 - Dynamic model selection and performance comparison
 - Real-time analysis progress updates
 - Mobile-responsive UI improvements
