@@ -4,16 +4,27 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
 import requests
+from dotenv import load_dotenv
 
 try:  # pragma: no cover - optional dependency guard
     import faiss  # type: ignore
 except ImportError:  # pragma: no cover - handled gracefully
     faiss = None  # type: ignore
 
+# Load environment variables early
+def _load_env() -> None:
+    """Load environment variables from .env files."""
+    root = Path(__file__).resolve().parents[1]
+    for candidate in (root / ".env.local", root / ".env", root / "api" / ".env.local"):
+        if candidate.exists():
+            load_dotenv(dotenv_path=candidate, override=False)
+
+_load_env()
 
 logger = logging.getLogger(__name__)
 

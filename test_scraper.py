@@ -19,53 +19,47 @@ def test_scraper():
     
     # Initialize scraper
     print("Initializing scraper...")
-    try:
-        scraper = WebsiteScraper()
-        print(f"✅ Scraper initialized")
-        print(f"   Using Firecrawl: {scraper.use_firecrawl}")
-        print()
-    except Exception as e:
-        print(f"❌ Failed to initialize scraper: {e}")
-        return False
+    scraper = WebsiteScraper()
+    assert scraper is not None, "Failed to initialize scraper"
+    print(f"✅ Scraper initialized")
+    print(f"   Using Firecrawl: {scraper.use_firecrawl}")
+    print()
     
     # Test URL
     test_url = "https://example.com"
     print(f"Testing URL: {test_url}")
     print()
     
-    try:
-        # Scrape website
-        result = scraper.scrape_website(test_url)
-        
-        # Display results
-        print("✅ Scrape successful!")
-        print()
-        print("Results:")
-        print(f"  Scraper used: {result.get('scraper_used', 'unknown')}")
-        print(f"  Title: {result.get('title', 'N/A')}")
-        print(f"  Description: {result.get('description', 'N/A')[:100]}...")
-        print(f"  Chunks: {len(result.get('chunks', []))}")
-        print(f"  Headings: {len(result.get('headings', []))}")
-        print(f"  Internal links: {len(result.get('internal_pages', []))}")
-        print(f"  External links: {len(result.get('external_links', []))}")
-        print(f"  Emails found: {len(result.get('contact_info', {}).get('emails', []))}")
-        print(f"  Phones found: {len(result.get('contact_info', {}).get('phones', []))}")
-        print()
-        
-        # Show first chunk
-        if result.get('chunks'):
-            print("First chunk preview:")
-            print("-" * 60)
-            print(result['chunks'][0][:300] + "...")
-            print("-" * 60)
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Scrape failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    # Scrape website
+    result = scraper.scrape_website(test_url)
+    
+    # Assertions for test validation
+    assert result is not None, "Scrape result should not be None"
+    assert 'scraper_used' in result, "Result should contain 'scraper_used'"
+    assert 'chunks' in result, "Result should contain 'chunks'"
+    
+    # Display results
+    print("✅ Scrape successful!")
+    print()
+    print("Results:")
+    print(f"  Scraper used: {result.get('scraper_used', 'unknown')}")
+    print(f"  Title: {result.get('title', 'N/A')}")
+    description = result.get('description') or 'N/A'
+    print(f"  Description: {description[:100] if len(description) > 100 else description}...")
+    print(f"  Chunks: {len(result.get('chunks', []))}")
+    print(f"  Headings: {len(result.get('headings', []))}")
+    print(f"  Internal links: {len(result.get('internal_pages', []))}")
+    print(f"  External links: {len(result.get('external_links', []))}")
+    print(f"  Emails found: {len(result.get('contact_info', {}).get('emails', []))}")
+    print(f"  Phones found: {len(result.get('contact_info', {}).get('phones', []))}")
+    print()
+    
+    # Show first chunk
+    if result.get('chunks'):
+        print("First chunk preview:")
+        print("-" * 60)
+        print(result['chunks'][0][:300] + "...")
+        print("-" * 60)
 
 def test_both_scrapers():
     """Test both Firecrawl and BeautifulSoup"""
@@ -101,8 +95,15 @@ if __name__ == "__main__":
     parser.add_argument("--both", action="store_true", help="Test both scrapers")
     args = parser.parse_args()
     
-    if args.both:
-        test_both_scrapers()
-    else:
-        success = test_scraper()
-        sys.exit(0 if success else 1)
+    try:
+        if args.both:
+            test_both_scrapers()
+        else:
+            test_scraper()
+        print("\n✅ All tests passed!")
+        sys.exit(0)
+    except (AssertionError, Exception) as e:
+        print(f"\n❌ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

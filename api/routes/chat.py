@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from api.chat import ConversationalAgent
 from api.core.rate_limiter import limiter
 from api.core.security import verify_auth
+from api.core.settings import get_settings
 from api.dependencies import get_chat_agent
 from api.http.schemas import ConversationRequest, ConversationResponse
 
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 
 @router.post("/chat", response_model=ConversationResponse)
-@limiter.limit("20/minute")
+@limiter.limit(lambda: get_settings().rate_limit_chat)
 async def chat_about_website(
     request: Request,
     payload: ConversationRequest = Body(...),

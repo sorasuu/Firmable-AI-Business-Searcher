@@ -56,6 +56,9 @@ class Settings:
     secret_key: str = field(default_factory=lambda: os.getenv("API_SECRET_KEY", "your-secret-key-here"))
     cors_allow_origins: Tuple[str, ...] = field(default_factory=_parse_origins)
     browser_question_limit: int = field(default_factory=lambda: _parse_int("GROQ_BROWSER_QUESTION_LIMIT", 3))
+    rate_limit_analyze: str = field(default_factory=lambda: os.getenv("RATE_LIMIT_ANALYZE", "10/minute"))
+    rate_limit_chat: str = field(default_factory=lambda: os.getenv("RATE_LIMIT_CHAT", "20/minute"))
+    deepinfra_api_key: str = field(default_factory=lambda: os.getenv("DEEPINFRA_API_KEY", "di-YOUR_DEEPINFRA_API_KEY_HERE"))
 
 
 @lru_cache

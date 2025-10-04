@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from api.core.rate_limiter import limiter
 from api.core.security import verify_auth
+from api.core.settings import get_settings
 from api.http.schemas import AnalysisRequest, AnalysisResponse
 from api.services.orchestrator import AnalysisOrchestrator
 from api.dependencies import get_analysis_orchestrator
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/api", tags=["analysis"])
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
-@limiter.limit("10/minute")
+@limiter.limit(lambda: get_settings().rate_limit_analyze)
 async def analyze_website(
     request: Request,
     payload: AnalysisRequest = Body(...),
